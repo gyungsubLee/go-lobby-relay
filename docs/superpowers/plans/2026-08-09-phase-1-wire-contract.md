@@ -49,7 +49,7 @@
 - Produces C# namespace `Relay.V1`.
 - Produces `make proto-generate`, `make proto-lint`, `make proto-breaking`, `make go-test`, and later `make protocol-check` entry points.
 
-- [ ] **Step 1: Add the module and tool pins**
+- [x] **Step 1: Add the module and tool pins**
 
 Use this `go.mod`:
 
@@ -85,7 +85,7 @@ unity/RelaySample/UserSettings/
 unity/RelaySample/obj/
 ```
 
-- [ ] **Step 2: Define the exact proto contract**
+- [x] **Step 2: Define the exact proto contract**
 
 Create `api/relay/v1/relay.proto`:
 
@@ -151,7 +151,7 @@ message Ping {
 }
 ```
 
-- [ ] **Step 3: Configure Buf lint, breaking checks and pinned remote plugins**
+- [x] **Step 3: Configure Buf lint, breaking checks and pinned remote plugins**
 
 Use `buf.yaml` v2 with module path `api`, `STANDARD` lint and `FILE` breaking rules. Use `buf.gen.yaml` v2 with clean generation, directory input `api`, these plugins and source-relative output:
 
@@ -173,7 +173,7 @@ inputs:
 
 The Go output must be `gen/go/relay/v1/relay.pb.go`. The C# output must be `unity/RelaySample/Assets/Relay/Generated/Relay.cs`. If the remote registry reports a packaging revision other than `1`, use the exact revision reported by Buf, record it in `docs/decisions/0001-m1-wire-and-threat-boundary.md`, and keep the upstream versions unchanged.
 
-- [ ] **Step 4: Add the checksum-pinned workspace tool bootstrap**
+- [x] **Step 4: Add the checksum-pinned workspace tool bootstrap**
 
 `scripts/bootstrap-tools.sh` supports the current verified host `Darwin/arm64`, downloads the exact Go archive and Buf binary from their official release URLs, verifies both SHA-256 values before extraction/install, and uses `mktemp -d` with a cleanup trap. It is idempotent: existing tools are accepted only if `go version` is `go1.26.5` and `buf --version` is `1.72.0`; otherwise it replaces only `.tools/go` or `.tools/bin/buf`. It must not call Docker or a package manager.
 
@@ -249,7 +249,7 @@ go-test: tools
 	$(GO_ENV) $(GO) test ./...
 ```
 
-- [ ] **Step 5: Generate and freeze the v1 baseline**
+- [x] **Step 5: Generate and freeze the v1 baseline**
 
 Run:
 
@@ -264,7 +264,7 @@ make go-tidy
 
 Expected: both generated files and `go.sum` exist; lint and breaking return exit `0`.
 
-- [ ] **Step 6: Verify regeneration is clean**
+- [x] **Step 6: Verify regeneration is clean**
 
 Stage the schema, baseline and generated files, run `make proto-generate`, then run:
 
@@ -274,7 +274,7 @@ git diff --exit-code -- api/relay/v1 gen/go/relay/v1 unity/RelaySample/Assets/Re
 
 Expected: exit `0` and no diff.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add .gitignore go.mod go.sum global.json Makefile scripts/bootstrap-tools.sh buf.yaml buf.gen.yaml api/relay/v1 gen/go/relay/v1 unity/RelaySample/Assets/Relay/Generated
