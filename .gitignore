@@ -1,1 +1,9 @@
 .planning/research/.cache/
+.cache/
+.tools/
+out/
+unity/RelaySample/Library/
+unity/RelaySample/Logs/
+unity/RelaySample/Temp/
+unity/RelaySample/UserSettings/
+unity/RelaySample/obj/
