@@ -1,4 +1,4 @@
-# Go Lightweight Game Relay
+# Go Lightweight Game Relay & Session Server
 
 ## What This Is
 
@@ -41,7 +41,7 @@ Unity PC·모바일 네이티브 클라이언트를 위한 Go 기반 초경량 �
 ## Context
 
 - 저장소는 소스와 커밋이 없는 greenfield 상태다.
-- 기존 PRD v3.0은 Go, Goroutine, UDP, Protobuf와 Unity Client Authority를 핵심 방향으로 정한다.
+- [PRD v4.0](../docs/PRD.md)이 기존 v3.0을 대체하며, 단일 Go 바이너리·인메모리 상태와 단일 VM/Docker 운영 범위를 고정한다.
 - Open Match 2는 티켓, Pool, Matchmaking Function 호출과 Match 결과를 담당하는 매치메이킹 제어면이며 게임 패킷 Relay나 게임 서버 할당기는 아니다.
 - Open Match 2에서 참고할 부분은 proto-first 계약, Go/C# namespace, 서버가 해석하는 메타데이터와 opaque payload의 분리, Director가 게임 서버 할당을 책임지는 경계다.
 - Open Match 2 자체는 public preview이고 운영용 Assignment API가 deprecated 상태이므로 초기 Relay의 필수 의존성으로 사용하지 않는다.
@@ -54,7 +54,7 @@ Unity PC·모바일 네이티브 클라이언트를 위한 Go 기반 초경량 �
 - **Authority model**: 게임 상태와 물리 연산은 클라이언트 권위다 — 서버는 최소 메타데이터만 검사하고 payload를 해석하지 않는다.
 - **Packet boundary**: UDP 데이터그램은 IP 단편화를 피할 수 있는 상한을 두고 초과 입력을 폐기한다 — 모바일 네트워크에서 예측 가능한 동작을 위해서다.
 - **Security**: 룸 ID만으로는 참가할 수 없으며, 만료 가능한 고엔트로피 자격 증명으로 UDP endpoint를 바인딩한다 — spoofing과 룸 간 주입을 막기 위해서다.
-- **Performance evidence**: RAM 20MB와 CPU 1~2%는 정의된 OS·하드웨어·룸 수·패킷 크기·전송률을 명시한 벤치마크 목표로 검증한다 — 부하 정의 없는 자원 비율은 완료 조건이 될 수 없다.
+- **Performance evidence**: RAM 20MB, CPU 2% 이하와 startup p95 50ms는 정의된 OS·하드웨어·룸 수·패킷 크기·전송률을 명시한 profile 목표로 검증한다 — host/load 정의 없는 자원 수치는 완료 조건이 될 수 없다.
 - **Deployment**: CGO를 사용하지 않는 단일 바이너리와 최소 컨테이너 이미지를 제공한다 — 빠른 시작과 이식성을 위해서다.
 - **Data lifecycle**: v1 룸과 세션은 인메모리이며 프로세스 재시작 시 소멸한다 — 외부 저장소 없이 Relay 핵심을 먼저 검증하기 위해서다.
 
@@ -62,13 +62,13 @@ Unity PC·모바일 네이티브 클라이언트를 위한 Go 기반 초경량 �
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| PC·모바일 네이티브용 UDP 데이터 경로 | WebGL 호환성보다 낮은 지연과 작은 런타임을 우선한다. | — Pending |
-| 작은 HTTP 관리 API와 UDP 데이터 경로 분리 | 저빈도 제어 작업과 고빈도 패킷 중계의 실패·성능 경계를 분리한다. | — Pending |
-| Open Match 2는 초기 런타임에서 제외 | Matchmaker와 Relay의 책임이 다르고 public preview 의존성은 MVP에 과하다. | — Pending |
-| Open Match 연동은 `Match → CreateRoom` 어댑터 경계로 준비 | Relay가 특정 Matchmaker 구현에 결합되지 않으면서 후속 연동을 허용한다. | — Pending |
-| Protobuf envelope와 opaque payload 분리 | 서버는 라우팅 메타데이터만 읽고 게임별 메시지를 재직렬화하지 않는다. | — Pending |
-| 단일 프로세스 인메모리 룸 관리로 시작 | 외부 DB와 분산 조정을 제거해 핵심 Relay를 가장 작게 검증한다. | — Pending |
-| 성능 수치는 재현 가능한 부하 시험으로 판정 | 절대적인 CPU 비율 약속 대신 측정 가능한 완료 기준을 만든다. | — Pending |
+| PC·모바일 네이티브용 UDP 데이터 경로 | WebGL 호환성보다 낮은 지연과 작은 런타임을 우선한다. | Accepted — 2026-08-08 |
+| 작은 HTTP 관리 API와 UDP 데이터 경로 분리 | 저빈도 제어 작업과 고빈도 패킷 중계의 실패·성능 경계를 분리한다. | Accepted — 2026-08-08 |
+| Open Match 2는 초기 런타임에서 제외 | Matchmaker와 Relay의 책임이 다르고 public preview 의존성은 MVP에 과하다. | Accepted — 2026-08-08 |
+| Open Match 연동은 `Match → PUT /v1/rooms/{room_id}` 외부 adapter 경계로 제한 | Relay가 특정 Matchmaker 구현에 결합되지 않으면서 후속 연동을 허용한다. | Accepted — 2026-08-08 |
+| Protobuf envelope와 opaque payload 분리 | 서버는 라우팅 메타데이터만 읽고 게임별 메시지를 재직렬화하지 않는다. | Accepted — 2026-08-08 |
+| 단일 프로세스 인메모리 룸 관리로 시작 | 외부 DB와 분산 조정을 제거해 핵심 Relay를 가장 작게 검증한다. | Accepted — 2026-08-08 |
+| 성능 수치는 재현 가능한 부하 시험으로 판정 | 절대적인 CPU 비율 약속 대신 측정 가능한 완료 기준을 만든다. | Accepted — 2026-08-08 |
 
 ## Evolution
 

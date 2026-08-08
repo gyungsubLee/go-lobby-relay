@@ -1,6 +1,7 @@
-# Requirements: Go Lightweight Game Relay
+# Requirements: Go Lightweight Game Relay & Session Server
 
-**Defined:** 2026-08-08  
+**Defined:** 2026-08-08
+
 **Core Value:** 인증된 룸 참가자 사이의 게임 패킷을 낮은 지연과 작은 서버 자원으로 안정적으로 중계한다.
 
 ## v1 Requirements
@@ -62,6 +63,14 @@
 - [ ] **PERF-01**: checked-in load client는 host/OS/CPU, Go version, 룸·참가자 수, packet size, send rate, fan-out과 duration이 고정된 named load·soak scenario를 재현한다.
 - [ ] **PERF-02**: benchmark report는 p50/p95/p99 relay latency, attempted/received/lost packets, throughput, drop reasons, CPU, RSS, allocations와 goroutine 수를 기록하고 PRD의 RAM·CPU·startup 목표를 해당 profile에서 pass/fail로 판정한다.
 
+## v1 Contract Interpretation
+
+- `SESS-01`의 명시적 revoke 단위는 room 전체다. `DELETE /v1/rooms/{room_id}`가 모든 participant grant/binding을 원자적으로 폐기하며 개별 revoke API는 v1에 없다.
+- `ROOM-03`의 “마지막 세션 이탈”은 `LEAVE` 요청이 아니라 모든 live grant와 binding이 expiry 또는 room DELETE로 terminal이 된 시점을 뜻한다.
+- 만료·폐기된 개별 grant는 같은 room에서 재발급하지 않는다. fresh grant가 필요하면 관리 계층이 새 `room_id`로 전체 allocation을 만든다.
+- `SAFE-01`의 metadata는 별도 arbitrary object가 아니라 room/participant/session ID와 HTTP header이며 v1은 사용자 정의 metadata 필드를 제공하지 않는다.
+- `OPS-02`의 private 또는 authenticated는 최소 조건이다. v1 planned contract는 VM loopback 또는 host-loopback-only Docker publish와 Bearer 인증을 함께 적용한다.
+
 ## v2 Requirements
 
 후속 마일스톤의 후보이며 현재 실행 로드맵에는 포함하지 않는다.
@@ -111,15 +120,44 @@
 
 ## Traceability
 
-로드맵 생성 시 각 v1 requirement를 정확히 하나의 Phase에 매핑한다.
+각 v1 requirement는 정확히 하나의 Phase에 매핑된다.
 
 | Requirement | Milestone | Phase | Status |
 |-------------|-----------|-------|--------|
+| PROT-01 | Milestone 1 | Phase 1 | Pending |
+| PROT-02 | Milestone 1 | Phase 1 | Pending |
+| ROOM-01 | Milestone 1 | Phase 2 | Pending |
+| ROOM-02 | Milestone 1 | Phase 2 | Pending |
+| SESS-01 | Milestone 1 | Phase 2 | Pending |
+| ROOM-03 | Milestone 1 | Phase 3 | Pending |
+| SESS-02 | Milestone 1 | Phase 3 | Pending |
+| SESS-03 | Milestone 1 | Phase 3 | Pending |
+| SESS-04 | Milestone 1 | Phase 3 | Pending |
+| RELY-01 | Milestone 1 | Phase 3 | Pending |
+| RELY-02 | Milestone 1 | Phase 3 | Pending |
+| RELY-03 | Milestone 1 | Phase 3 | Pending |
+| SAFE-01 | Milestone 1 | Phase 3 | Pending |
+| SAFE-02 | Milestone 1 | Phase 3 | Pending |
+| SAFE-03 | Milestone 1 | Phase 3 | Pending |
+| UNITY-01 | Milestone 1 | Phase 4 | Pending |
+| UNITY-02 | Milestone 1 | Phase 4 | Pending |
+| UNITY-03 | Milestone 1 | Phase 4 | Pending |
+| OPS-01 | Milestone 2 | Phase 5 | Pending |
+| OPS-02 | Milestone 2 | Phase 5 | Pending |
+| OPS-03 | Milestone 2 | Phase 5 | Pending |
+| OPS-04 | Milestone 2 | Phase 5 | Pending |
+| SHIP-01 | Milestone 2 | Phase 6 | Pending |
+| SHIP-02 | Milestone 2 | Phase 6 | Pending |
+| SHIP-03 | Milestone 2 | Phase 6 | Pending |
+| VERI-01 | Milestone 2 | Phase 7 | Pending |
+| VERI-02 | Milestone 2 | Phase 7 | Pending |
+| PERF-01 | Milestone 2 | Phase 7 | Pending |
+| PERF-02 | Milestone 2 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: 29 total
-- Mapped to phases: 0
-- Unmapped: 29 ⚠️
+- Mapped to phases: 29 ✓
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-08-08*
