@@ -373,6 +373,28 @@ func TestEncodeServerRejectsInvalidPackets(t *testing.T) {
 	}
 }
 
+func TestEncodeServerRejectsOversizedPayloadEnvelopeAboveDatagramCap(t *testing.T) {
+	envelope := validServerData()
+	envelope.RoomId = strings.Repeat("r", MaxIDBytes)
+	envelope.SessionId = strings.Repeat("s", MaxIDBytes)
+	envelope.GetServerData().SenderParticipantId = strings.Repeat("p", MaxIDBytes)
+	envelope.GetServerData().Payload = make([]byte, 1100)
+
+	wire := mustMarshal(t, envelope)
+	if len(wire) <= MaxDatagramBytes {
+		t.Fatalf("fixture marshaled to %d bytes, want more than %d", len(wire), MaxDatagramBytes)
+	}
+	t.Logf("oversized ServerData fixture encoded length: %d bytes", len(wire))
+
+	// V1 rejects this at the 900-byte payload check before the defensive
+	// post-marshal cap; this public regression does not claim that branch is reachable.
+	if output, err := EncodeServer(envelope); err == nil {
+		t.Fatalf("EncodeServer() = %x, want oversized error", output)
+	} else if got := ReasonOf(err); got != ReasonOversized {
+		t.Fatalf("ReasonOf(%v) = %q, want %q", err, got, ReasonOversized)
+	}
+}
+
 func TestWorstCaseEnvelopeSizes(t *testing.T) {
 	client := validClientData()
 	client.RoomId = strings.Repeat("r", MaxIDBytes)
