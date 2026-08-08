@@ -4,7 +4,7 @@
 
 **Goal:** Go와 Unity C#이 공유하는 bounded Protobuf 계약, 재현 가능한 생성·breaking 검사, byte-exact HMAC/호환성 fixture와 승인된 M1 위협 경계를 완성한다.
 
-**Architecture:** `api/relay/v1/relay.proto`가 유일한 wire source of truth다. Docker로 고정한 Buf와 Go 도구가 generated Go/C#을 만들고, `internal/protocol`이 신뢰 경계에서 크기·방향·필드 규칙을 검사한다. Go와 독립 C# console self-check가 같은 checked-in vector를 양방향으로 해석해 Unity 통합 전에 계약 drift를 차단한다.
+**Architecture:** `api/relay/v1/relay.proto`가 유일한 wire source of truth다. checksum으로 고정한 workspace-local Buf와 Go 도구가 generated Go/C#을 만들고, `internal/protocol`이 신뢰 경계에서 크기·방향·필드 규칙을 검사한다. 동일 버전의 Docker digest도 기록하지만 현재 Docker Desktop의 container-start 장애와 실행 중인 사용자 DB를 건드리지 않는다. Go와 독립 C# console self-check가 같은 checked-in vector를 양방향으로 해석해 Unity 통합 전에 계약 drift를 차단한다.
 
 **Tech Stack:** Go 1.26.5, Protocol Buffers 35.1, `google.golang.org/protobuf` v1.36.11, Buf 1.72.0, C#/.NET SDK 9.0.305, `Google.Protobuf` 3.35.1, GNU Make.
 
@@ -13,6 +13,9 @@
 - Go module path is `github.com/gyungsubLee/go-game-relay`.
 - Go image is `golang@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599`.
 - Buf image is `bufbuild/buf@sha256:65bd496a89c762ad7151ca9e7d885a45dacb3671a8e8ec39738b9f844d3405ea`.
+- Current-host Go archive is `go1.26.5.darwin-arm64.tar.gz` with SHA-256 `efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a`.
+- Current-host Buf binary is `buf-Darwin-arm64` with SHA-256 `5176f23a6118b9978de1340c3e3301a4ed0d48e16a669510be44b4c355170d57`.
+- `make tools` installs only into ignored `.tools/`; it never modifies `/usr/local`, Homebrew or the running Docker Desktop.
 - Protobuf application package is `relay.v1`; application revision is `1`; one UDP datagram contains one `Envelope`.
 - Total datagram is at most `1200` bytes, opaque payload at most `900` bytes, and room/session/sender IDs are `1..64` ASCII bytes matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
 - Grant/candidate/client nonce/binding IDs are exactly `16` bytes; server nonce and HMAC-SHA-256 tags are exactly `32` bytes.
@@ -33,6 +36,7 @@
 - Create: `go.sum`
 - Create: `global.json`
 - Create: `Makefile`
+- Create: `scripts/bootstrap-tools.sh`
 - Create: `buf.yaml`
 - Create: `buf.gen.yaml`
 - Create: `api/relay/v1/relay.proto`
@@ -72,6 +76,7 @@ Ignore only generated build/cache products, not generated protocol sources:
 
 ```gitignore
 .cache/
+.tools/
 out/
 unity/RelaySample/Library/
 unity/RelaySample/Logs/
@@ -168,36 +173,80 @@ inputs:
 
 The Go output must be `gen/go/relay/v1/relay.pb.go`. The C# output must be `unity/RelaySample/Assets/Relay/Generated/Relay.cs`. If the remote registry reports a packaging revision other than `1`, use the exact revision reported by Buf, record it in `docs/decisions/0001-m1-wire-and-threat-boundary.md`, and keep the upstream versions unchanged.
 
-- [ ] **Step 4: Add the minimal Dockerized Make targets**
+- [ ] **Step 4: Add the checksum-pinned workspace tool bootstrap**
 
-The Makefile must run both images by digest, mount the repository at `/workspace`, run as the host uid/gid, set `HOME=/tmp`, and persist only `.cache/go-build` and `.cache/go-mod`. Commands:
+`scripts/bootstrap-tools.sh` supports the current verified host `Darwin/arm64`, downloads the exact Go archive and Buf binary from their official release URLs, verifies both SHA-256 values before extraction/install, and uses `mktemp -d` with a cleanup trap. It is idempotent: existing tools are accepted only if `go version` is `go1.26.5` and `buf --version` is `1.72.0`; otherwise it replaces only `.tools/go` or `.tools/bin/buf`. It must not call Docker or a package manager.
+
+Use this implementation:
+
+```sh
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+tools_dir="$repo_root/.tools"
+go_dir="$tools_dir/go"
+buf_bin="$tools_dir/bin/buf"
+
+if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+  echo "unsupported bootstrap host: expected Darwin/arm64" >&2
+  exit 1
+fi
+
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/relay-tools.XXXXXX")
+trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+
+if [ ! -x "$go_dir/bin/go" ] || ! "$go_dir/bin/go" version | grep -q 'go1.26.5'; then
+  curl -fL --retry 3 -o "$tmp_dir/go.tar.gz" https://go.dev/dl/go1.26.5.darwin-arm64.tar.gz
+  printf '%s  %s\n' efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a "$tmp_dir/go.tar.gz" | shasum -a 256 -c -
+  tar -C "$tmp_dir" -xzf "$tmp_dir/go.tar.gz"
+  rm -rf -- "$go_dir"
+  mkdir -p "$tools_dir"
+  mv "$tmp_dir/go" "$go_dir"
+fi
+
+if [ ! -x "$buf_bin" ] || [ "$("$buf_bin" --version)" != "1.72.0" ]; then
+  curl -fL --retry 3 -o "$tmp_dir/buf" https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Darwin-arm64
+  printf '%s  %s\n' 5176f23a6118b9978de1340c3e3301a4ed0d48e16a669510be44b4c355170d57 "$tmp_dir/buf" | shasum -a 256 -c -
+  mkdir -p "$(dirname "$buf_bin")"
+  install -m 0755 "$tmp_dir/buf" "$buf_bin"
+fi
+
+"$go_dir/bin/go" version
+"$buf_bin" --version
+```
+
+The Makefile keeps the Docker digests as auditable metadata, but all Phase 1 targets depend on `tools` and execute the workspace-local binaries:
 
 ```make
 GO_IMAGE := golang@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599
 BUF_IMAGE := bufbuild/buf@sha256:65bd496a89c762ad7151ca9e7d885a45dacb3671a8e8ec39738b9f844d3405ea
-DOCKER_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -e HOME=/tmp -v $(CURDIR):/workspace -w /workspace
-GO_RUN := $(DOCKER_RUN) -e GOCACHE=/workspace/.cache/go-build -e GOMODCACHE=/workspace/.cache/go-mod $(GO_IMAGE)
-BUF_RUN := $(DOCKER_RUN) $(BUF_IMAGE)
+GO := $(CURDIR)/.tools/go/bin/go
+BUF := $(CURDIR)/.tools/bin/buf
+GO_ENV := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod
 
-.PHONY: proto-generate proto-lint proto-breaking proto-baseline go-tidy go-test
+.PHONY: tools proto-generate proto-lint proto-breaking proto-baseline go-tidy go-test
 
-proto-generate:
-	$(BUF_RUN) generate
+tools:
+	./scripts/bootstrap-tools.sh
 
-proto-lint:
-	$(BUF_RUN) lint
+proto-generate: tools
+	$(BUF) generate
 
-proto-breaking:
-	$(BUF_RUN) breaking --against api/relay/v1/relay-v1.binpb
+proto-lint: tools
+	$(BUF) lint
 
-proto-baseline:
-	$(BUF_RUN) build -o api/relay/v1/relay-v1.binpb
+proto-breaking: tools
+	$(BUF) breaking --against api/relay/v1/relay-v1.binpb
 
-go-tidy:
-	$(GO_RUN) go mod tidy
+proto-baseline: tools
+	$(BUF) build -o api/relay/v1/relay-v1.binpb
 
-go-test:
-	$(GO_RUN) go test ./...
+go-tidy: tools
+	$(GO_ENV) $(GO) mod tidy
+
+go-test: tools
+	$(GO_ENV) $(GO) test ./...
 ```
 
 - [ ] **Step 5: Generate and freeze the v1 baseline**
@@ -205,6 +254,7 @@ go-test:
 Run:
 
 ```bash
+make tools
 make proto-lint
 make proto-generate
 make proto-baseline
@@ -227,7 +277,7 @@ Expected: exit `0` and no diff.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add .gitignore go.mod go.sum global.json Makefile buf.yaml buf.gen.yaml api/relay/v1 gen/go/relay/v1 unity/RelaySample/Assets/Relay/Generated
+git add .gitignore go.mod go.sum global.json Makefile scripts/bootstrap-tools.sh buf.yaml buf.gen.yaml api/relay/v1 gen/go/relay/v1 unity/RelaySample/Assets/Relay/Generated
 git commit -m "build(protocol): pin schema generation"
 ```
 
@@ -306,7 +356,7 @@ Run:
 
 ```bash
 make go-test
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e GOCACHE=/workspace/.cache/go-build -e GOMODCACHE=/workspace/.cache/go-mod -v "$PWD:/workspace" -w /workspace golang@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 go test ./internal/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=5s
+GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go test ./internal/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=5s
 ```
 
 Expected: all unit tests pass; fuzz exits `0` without panic or excessive allocation caused by input length.
@@ -450,7 +500,7 @@ csharp-compat:
 
 protocol-check: proto-lint proto-breaking proto-generate
 	git diff --exit-code -- api/relay/v1 gen/go/relay/v1 unity/RelaySample/Assets/Relay/Generated
-	$(GO_RUN) go test ./internal/protocol
+	$(GO_ENV) $(GO) test ./internal/protocol
 	$(MAKE) csharp-compat
 ```
 
@@ -461,7 +511,7 @@ Run fresh:
 ```bash
 make protocol-check
 make go-test
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e GOCACHE=/workspace/.cache/go-build -e GOMODCACHE=/workspace/.cache/go-mod -v "$PWD:/workspace" -w /workspace golang@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 go test ./internal/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=10s
+GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go test ./internal/protocol -run '^$' -fuzz '^FuzzDecodeClient$' -fuzztime=10s
 git diff --check
 ```
 
@@ -474,7 +524,7 @@ Expected: all commands exit `0`, C# prints `protocol compatibility OK`, generati
 - D-01 accepted: v1 protects authenticated client ingress against off-path spoof/replay, pins exact server source for downstream packets, and explicitly does not provide payload confidentiality or complete on-path/downstream cryptographic integrity.
 - D-02 accepted: revision `1`, datagram `1200`, payload `900`, IDs `64`, unsupported revisions rejected; fixture lengths are recorded from the actual test output.
 - Replay semantics are fixed at a 64-bit sliding window; traffic rate values remain Phase 3's separate decision.
-- Exact Go module, image digests and accepted Buf plugin revisions.
+- Exact Go module, image digests, host archive checksums and accepted Buf plugin revisions.
 
 `docs/evidence/m1/phase-1.md` records the commit, tool versions, commands, exit codes, test names, actual worst-case ClientData/ServerData byte lengths, C# output and fuzz duration. It contains no secrets or payload contents beyond the public golden fixture.
 
