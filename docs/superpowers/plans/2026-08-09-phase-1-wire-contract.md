@@ -382,7 +382,7 @@ git commit -m "feat(protocol): validate bounded envelopes"
 - Produces `AuthTag`, `BindingKey`, `BoundTag`, `ClientDataTag`, `PingTag`, and `EqualTag`.
 - Consumes the protocol revision and validated ASCII IDs from Task 2.
 
-- [ ] **Step 1: Check in the independent known-answer vector**
+- [x] **Step 1: Check in the independent known-answer vector**
 
 The JSON fixture must contain the exact values below:
 
@@ -415,7 +415,7 @@ The JSON fixture must contain the exact values below:
 }
 ```
 
-- [ ] **Step 2: Write failing tests for every transcript**
+- [x] **Step 2: Write failing tests for every transcript**
 
 Tests independently reconstruct the canonical frame:
 
@@ -426,23 +426,23 @@ concat(u32be(field byte length) || field bytes)
 
 Assert AUTH tag, binding key, BOUND tag, ClientData tag and Ping tag exactly match the fixture. Add `EqualTag` tests for exact, one-byte changed, short and long inputs.
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
 Run `make go-test`.
 
 Expected: compilation fails because transcript functions and fixed-byte types do not exist.
 
-- [ ] **Step 4: Implement only the five domains**
+- [x] **Step 4: Implement only the five domains**
 
 Use `encoding/binary`, `crypto/hmac` and `crypto/sha256`. Integers are first encoded to fixed-width big-endian bytes (`uint32=4`, `uint64=8`, `int64=8`). `EqualTag` must length-check and call `hmac.Equal`. Do not sign Protobuf serialization and do not create a pluggable crypto interface.
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 Run `make go-test`.
 
 Expected: all codec and HMAC tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/protocol/auth.go internal/protocol/auth_test.go internal/protocol/testdata/v1-golden.json
