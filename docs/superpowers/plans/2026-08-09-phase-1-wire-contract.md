@@ -296,7 +296,7 @@ git commit -m "build(protocol): pin schema generation"
 - Produces `EncodeServer(envelope *relayv1.Envelope) ([]byte, error)`.
 - Produces `ReasonOf(error) Reason` with reasons `malformed`, `oversized`, `unsupported_version`.
 
-- [ ] **Step 1: Write table tests for accepted client packets**
+- [x] **Step 1: Write table tests for accepted client packets**
 
 Tests construct and deterministically marshal valid HELLO, AUTH, ClientData and Ping envelopes. Assert `DecodeClient` returns the same final body and that:
 
@@ -312,15 +312,15 @@ const (
 
 HELLO padding must be adjusted until the encoded datagram is exactly `256` bytes.
 
-- [ ] **Step 2: Write the client rejection matrix before implementation**
+- [x] **Step 2: Write the client rejection matrix before implementation**
 
 One table must cover: empty/malformed wire, `1201` bytes, revision `2`, absent body, server-only CHALLENGE/BOUND/ServerData, invalid room/session ID, sequence mismatch, auth tag mismatch, every fixed-length field at `N-1` and `N+1`, `901`-byte payload, `255`-byte HELLO, envelope unknown field and nested body unknown field. Add a raw-wire case proving repeated singular/oneof fields use generated decoder last-one-wins semantics and only the final selected body is validated. Assert the exact `ReasonOf` value and no panic.
 
-- [ ] **Step 3: Write server encoding tests before implementation**
+- [x] **Step 3: Write server encoding tests before implementation**
 
 Accept CHALLENGE, BOUND and ServerData only. Reject HELLO/AUTH/ClientData/Ping, invalid tag/sequence/ID/fixed length, `901`-byte payload, and any marshaled output over `1200`. Assert deterministic marshal output and empty `ServerData.auth_tag`. Construct worst-case ClientData and ServerData fixtures with 64-byte IDs, `math.MaxUint64` sequence and a 900-byte payload; record both encoded lengths and assert each is at most 1200.
 
-- [ ] **Step 4: Run RED**
+- [x] **Step 4: Run RED**
 
 Run:
 
@@ -330,7 +330,7 @@ make go-test
 
 Expected: compilation fails because `DecodeClient`, `EncodeServer`, constants and `ReasonOf` do not exist.
 
-- [ ] **Step 5: Implement the minimum codec**
+- [x] **Step 5: Implement the minimum codec**
 
 Use `proto.UnmarshalOptions{DiscardUnknown: false}` and reject `ProtoReflect().GetUnknown()` on both the envelope and selected body. Use `proto.MarshalOptions{Deterministic: true}` for server output. Validate IDs byte-wise without Unicode normalization. Check datagram length before unmarshal and output length after marshal. Keep validation pure; do not add state, logging, transport or generic validators.
 
@@ -350,7 +350,7 @@ func DecodeClient(datagram []byte) (*relayv1.Envelope, error)
 func EncodeServer(envelope *relayv1.Envelope) ([]byte, error)
 ```
 
-- [ ] **Step 6: Run GREEN and fuzz the trust boundary**
+- [x] **Step 6: Run GREEN and fuzz the trust boundary**
 
 Run:
 
@@ -361,7 +361,7 @@ GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go 
 
 Expected: all unit tests pass; fuzz exits `0` without panic or excessive allocation caused by input length.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/protocol/codec.go internal/protocol/codec_test.go internal/protocol/fuzz_test.go
