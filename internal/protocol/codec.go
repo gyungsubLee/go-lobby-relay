@@ -87,7 +87,7 @@ func validateEnvelope(envelope *relayv1.Envelope) error {
 	if envelope.ProtocolRevision != Revision {
 		return errUnsupportedVersion
 	}
-	if !validID(envelope.RoomId) || !validID(envelope.SessionId) {
+	if !ValidID(envelope.RoomId) || !ValidID(envelope.SessionId) {
 		return errMalformed
 	}
 	return nil
@@ -147,7 +147,7 @@ func validateServer(envelope *relayv1.Envelope, nowUnixMilli int64) error {
 	case *relayv1.Envelope_ServerData:
 		if body == nil || body.ServerData == nil || len(body.ServerData.ProtoReflect().GetUnknown()) != 0 ||
 			envelope.Sequence == 0 || len(envelope.AuthTag) != 0 ||
-			!validID(body.ServerData.SenderParticipantId) {
+			!ValidID(body.ServerData.SenderParticipantId) {
 			return errMalformed
 		}
 		if len(body.ServerData.Payload) > MaxPayloadBytes {
@@ -159,7 +159,7 @@ func validateServer(envelope *relayv1.Envelope, nowUnixMilli int64) error {
 	return nil
 }
 
-func validID(id string) bool {
+func ValidID(id string) bool {
 	if len(id) == 0 || len(id) > MaxIDBytes {
 		return false
 	}
