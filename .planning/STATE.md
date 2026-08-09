@@ -4,7 +4,7 @@ status: blocked
 progress:
   total_phases: 7
   completed_phases: 2
-  total_plans: 2
+  total_plans: 4
   completed_plans: 2
   percent: 29
 ---
@@ -21,9 +21,9 @@ See: .planning/PROJECT.md (updated 2026-08-08)
 ## Current Position
 
 Phase: 3 of 7 (Authenticated UDP Relay)
-Plan: 0 of TBD in current phase
-Status: Blocked — the D-04 packet/byte/fan-out policy candidate is unapproved and owner approval is required before Phase 3 implementation
-Last activity: 2026-08-09 — Phase 2 passed at candidate `da02563124a605757b0f9ccbf66284d8fcc3b018`; see [verification evidence](../docs/evidence/m1/phase-2.md)
+Plan: 0 of 1 in current phase
+Status: Blocked — the reviewed D-04 proposal is documented but owner approval is required before Phase 3 implementation
+Last activity: 2026-08-09 — prepared [proposed ADR 0003](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md), the [Phase 3 plan](../docs/superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md), and the [Phase 4 plan](../docs/superpowers/plans/2026-08-09-phase-4-unity-native-integration.md) after Phase 2 verification
 
 Progress: [███░░░░░░░] 29%
 
@@ -60,16 +60,18 @@ Decisions are logged in PROJECT.md Key Decisions table and authoritative ADRs.
 - [D-02]: Accepted protocol revision `1`, datagram `1200`, payload `900`, ID `1..64` ASCII bytes, and unsupported-revision rejection; measured worst-case envelopes are `1103`/`1117` bytes. See [ADR 0001](../docs/decisions/0001-m1-wire-and-threat-boundary.md).
 - [D-03]: Accepted compiled defaults as hard maxima: open rooms/records/capacity/sessions `256`/`4096`/`16`/`4096`, request-required room/grant TTL max `2h`, sweep/empty/tombstone `1s`/`5s`/`60s`, strict 64-byte ASCII IDs, HTTP header/body/timeouts and management admission bounds. Authority ends at `now >= deadline`; DELETE clears secrets and creates a tombstone immediately; room/empty/tombstone cleanup completes within `1s`/`6s`/`61s`. Future configuration may only lower positive finite values and cannot disable limits. See [ADR 0002](../docs/decisions/0002-m1-control-lifecycle-policy.md).
 - [Phase 2]: ROOM-01, ROOM-02, and SESS-01 passed on the clean source candidate; ROOM-03 and SAFE-01 remain assigned to Phase 3. See [Phase 2 evidence](../docs/evidence/m1/phase-2.md).
-- [D-04 boundary]: D-01 fixed only the 64-bit replay window. The candidate source/session/room/global packet·byte rates and fan-out budgets are not approved; Product, Security, and Operations owner approval is required before Phase 3 implementation.
+- [D-04 proposed]: [ADR 0003](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md) adds a process-global pre-auth budget to the reviewed source/session/room/process/fan-out profile and separates pre-auth, authenticated-ingress, and fan-out atomic charging. It remains unapproved; Product, Security, and Operations owner approval is required before Phase 3 implementation.
+- [M1 composition]: Phase 3 owns the minimum single `cmd/relay` binary needed by the Phase 4 proof; Phase 5 still owns complete configuration precedence, status, structured operations, drain, and runbook behavior.
 
 ### Pending Todos
 
-- Obtain D-04 Product, Security, and Operations owner approval before Phase 3 implementation. Keep ROOM-03, SAFE-01, and every other Phase 3 requirement pending until its full UDP/binding gate passes.
+- Obtain explicit D-04 approval for ADR 0003 before Phase 3 implementation. Keep ROOM-03, SAFE-01, and every other Phase 3 requirement pending until its full UDP/binding gate passes.
+- Before Phase 4, approve D-05 and provide/install Unity `6000.3.20f1`, a physical Android ARM64 device, and the agreed IPv4 hostname/network.
 
 ### Blockers/Concerns
 
-- [Phase 3]: D-04 packet/byte/fan-out policy candidate remains unapproved; implementation is blocked pending explicit Product, Security, and Operations owner approval.
-- [Phase 4]: The Unity 6.3 LTS baseline still needs an exact `6000.3.x` patch and matching modules; the approved PC/mobile Mono/IL2CPP devices and IPv4/IPv6/NAT64 evidence matrix remain unresolved. The locally observed `6000.0.26f1` editor is not the required baseline.
+- [Phase 3]: [ADR 0003](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md) remains `Proposed`; implementation is blocked pending explicit Product, Security, and Operations owner approval.
+- [Phase 4]: The proposed matrix is Unity `6000.3.20f1`, macOS ARM64 Mono, physical Android ARM64 IL2CPP, and IPv4 Wi-Fi. It remains unapproved; only `6000.0.26f1` is installed, and no physical device or qualifying network evidence is available.
 - [Phase 7]: Define the clean host, named workload, latency/loss/throughput criteria and soak duration before interpreting the fixed RSS 20MB, CPU 2% and startup p95 50ms targets.
 
 ## Deferred Items
@@ -84,5 +86,5 @@ Decisions are logged in PROJECT.md Key Decisions table and authoritative ADRs.
 ## Session Continuity
 
 Last session: 2026-08-09
-Stopped at: Phase 2 verified; Phase 3 implementation blocked pending approval of the unapproved D-04 candidate
-Resume file: docs/TRD.md (§11 decision registry, D-04 packet policy)
+Stopped at: Phase 2 verified; reviewed Phase 3/4 plans written; Phase 3 implementation awaits explicit D-04 approval
+Resume file: docs/decisions/0003-m1-udp-admission-and-fanout-policy.md

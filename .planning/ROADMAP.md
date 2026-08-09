@@ -66,7 +66,9 @@
   3. 유효한 opaque payload는 byte-preserving 상태로 발신자를 제외한 같은 room의 활성·bound 참가자에게만 전달되고, delivery·ordering·deduplication·retry는 보장되지 않는다.
   4. HTTP·room·session·TTL·metadata·datagram hard limit과 source·session·room·global packet·byte·fan-out budget이 mutation과 fan-out 전에 적용되어 느린 수신자나 한 발신자가 loop, queue, goroutine 또는 memory를 무한히 늘리지 못한다.
   5. malformed, oversized, unsupported-version, replayed, expired, revoked, wrong-room 및 rate-limited 입력은 panic이나 cross-room mutation 없이 폐기되고 bounded reason으로 집계되며 grant와 game payload는 기록되지 않는다. 마지막 live grant/binding 뒤 endpoint를 포함한 모든 room 자원이 deadline 안에 정리된다.
-**Plans:** TBD
+  6. 최소 `cmd/relay` 바이너리는 같은 인메모리 store에 management HTTP, UDP loop와 sweeper를 연결하고 context 취소 시 owned listener와 goroutine을 닫고 join하여 Phase 4의 단일-process native proof를 실행할 수 있다.
+**Plans:** 0/1 — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md)
+**Decision gate:** [Proposed ADR 0003 — M1 UDP admission and fan-out policy](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md); explicit owner approval required before implementation
 
 ### Phase 4: Unity Native Integration
 **Goal:** Unity PC·모바일 네이티브 클라이언트가 단일 Go Relay 프로세스에서 실제 연결 수명주기와 packet 교환을 완료할 수 있다.
@@ -77,7 +79,8 @@
   1. operator secret이 없는 최소 Unity C# sample 두 개가 주입된 grant로 인증하고 단일 Go Relay 바이너리를 통해 packet을 교환한 뒤 취소와 정상 종료를 완료한다.
   2. sample은 pause/resume와 source-port 변경 뒤 live grant로 authenticated rebind하고, grant expiry 뒤에는 새 `room_id` allocation의 fresh grant로 통신을 복구한다.
   3. sample은 hostname과 address-family-agnostic socket API를 사용하고, 승인된 PC target 1개와 Android/iOS 중 mobile target 1개의 Mono/IL2CPP build 결과 및 승인된 IPv4·IPv6/NAT64 적용 범위를 보여 준다.
-**Plans:** TBD
+**Plans:** 0/1 — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-4-unity-native-integration.md)
+**Decision gate:** D-05 exact Unity/device/network matrix remains unapproved
 
 #### Milestone 1 Completion Gate
 
@@ -151,8 +154,8 @@ Milestone 2는 Phase 5-7의 success criteria가 모두 충족되고 다음 운�
 |-------|-----------|----------------|--------|-----------|
 | 1. Wire Contract and Threat Boundary | Milestone 1 | 1/1 | Complete | 2026-08-09 |
 | 2. In-Memory Room and Session Kernel | Milestone 1 | 1/1 | Complete | 2026-08-09 |
-| 3. Authenticated UDP Relay | Milestone 1 | 0/TBD | Not started | - |
-| 4. Unity Native Integration | Milestone 1 | 0/TBD | Not started | - |
+| 3. Authenticated UDP Relay | Milestone 1 | 0/1 | Blocked on D-04 approval | - |
+| 4. Unity Native Integration | Milestone 1 | 0/1 | Blocked on Phase 3 and D-05 | - |
 | 5. Single-Host Runtime Operations | Milestone 2 | 0/TBD | Not started | - |
 | 6. Static Packaging and Host Deployment | Milestone 2 | 0/TBD | Not started | - |
 | 7. Failure Drills and Performance Evidence | Milestone 2 | 0/TBD | Not started | - |

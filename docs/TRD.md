@@ -86,13 +86,13 @@ flowchart LR
     S -. "recipient value snapshot" .-> D
 ```
 
-프로세스는 listener bind 전에 config 전체를 검증한다. HTTP handler goroutine, UDP receive goroutine, sweeper goroutine은 같은 store API를 호출하지만 mutable domain state를 소유하지 않는다. composition root만 startup, readiness, drain, socket close와 owned goroutine join을 소유한다.
+Phase 3의 최소 composition root는 accepted fixed/default 값과 M1 launch input을 listener bind 전에 검증하고 HTTP, UDP, sweeper를 같은 store에 연결하며 context 취소 시 socket close와 owned goroutine join을 수행한다. Phase 5는 이 조립점을 교체하지 않고 full config precedence, readiness/status, signal/drain과 ordered deadline shutdown을 추가한다. HTTP handler goroutine, UDP receive goroutine, sweeper goroutine은 mutable domain state를 소유하지 않는다.
 
 ### 3.1 컴포넌트 책임
 
 | 컴포넌트 | 책임 | mutable state |
 |---|---|---|
-| composition root / lifecycle | config 검증, 구성, signal, readiness, ordered shutdown | process flags만 |
+| composition root / lifecycle | Phase 3 최소 구성·context close/join; Phase 5 full config, signal, readiness, drain, ordered shutdown | process flags만 |
 | management HTTP adapter | Bearer 인증, bounded JSON decode, store error의 HTTP mapping, redaction, status | 없음 |
 | UDP relay adapter | bounded read/parse, bind/rebind, packet admission, recipient writes | socket와 고정 buffer만 |
 | protocol codec | generated types, version/bounds 검사, canonical HMAC transcript | 없음 |
@@ -125,8 +125,8 @@ deploy/relay.service
 1. `roomsByID`, `grantsByID`, `bindingsByID`, pending challenge와 counters는 store의 한 `sync.RWMutex` 아래 함께 변경한다.
 2. room/session 전이는 단일 critical section에서 원자적이다. adapter가 index를 직접 수정하지 않는다.
 3. lock 안에서는 network I/O, Protobuf marshal, JSON encode, structured logging을 하지 않는다.
-4. UDP loop는 짧은 read lock에서 binding generation, derived key와 authoritative sender/room 값만 snapshot하고, HMAC 검증과 output marshal은 lock 밖에서 수행한다.
-5. marshal 뒤 exclusive lock에서 같은 binding generation과 deadline을 재검사하고 replay 소비, exact output-size budget 소비와 현재 recipient `netip.AddrPort` snapshot을 한 번에 선형화한다. 그 뒤 lock을 해제하고 write한다.
+4. `ClientData`/`Ping`의 첫 exclusive lock에서 binding generation, exact endpoint, authoritative ID/deadline, HMAC, replay 분류와 authenticated ingress를 함께 선형화한다. fresh sequence는 ingress 거부에도 소비하고 replay는 window를 바꾸지 않는다. derived key는 store 밖으로 내보내지 않으며, 최대 `900`-byte payload의 HMAC을 이 lock 안에서 계산하는 것이 M1의 의도된 ceiling이다.
+5. ingress 성공 뒤 lock 밖에서 authoritative snapshot으로 `ServerData`를 marshal하고 output cap을 검사한다. 두 번째 exclusive lock은 generation/deadline을 재검사하고 현재 recipient 계산, room/process fan-out 원자 소비와 `netip.AddrPort` snapshot만 수행한다. 그 뒤 lock을 해제하고 best-effort write하며 ingress/fan-out token은 후속 실패에 환불하지 않는다.
 6. room별 goroutine, socket, channel, timer, retry queue가 없다. application queue 크기는 0이다.
 7. source address는 선택한 `udp4`/`udp6` family와 일치해야 하며 OS별 mapped-address 동작에 의존하지 않는다. 인증은 canonical exact `netip.AddrPort`로 비교하고 IP만 사용하지 않는다.
 8. 서버 monotonic 시간이 권위이며 만료 경계는 `now >= deadline`이다. 외부 `expires_at`은 그 deadline의 UTC 표현이고, 권한 거부는 sweep을 기다리지 않고 즉시 적용한다.
@@ -135,7 +135,7 @@ deploy/relay.service
 
 ## 4. HTTP API contract
 
-Phase 2는 이 절의 room `PUT`/`GET`/`DELETE` handler와 schema, 엄격한 decoding, 인증, redaction, body/header/time bound를 구현·검증했다. 실행 binary의 listener 조립, VM/Docker bind mode, remote transport와 `/v1/status`는 Phase 5까지 **planned**다.
+Phase 2는 이 절의 room `PUT`/`GET`/`DELETE` handler와 schema, 엄격한 decoding, 인증, redaction, body/header/time bound를 구현·검증했다. Phase 3는 M1 native client 검증에 필요한 최소 HTTP+UDP listener와 sweeper를 단일 binary로 조립한다. VM/Docker bind mode, full config precedence, remote transport, `/v1/status`, readiness/drain과 signal lifecycle은 Phase 5까지 **planned**다.
 
 ### 4.1 공통 규칙
 
@@ -517,13 +517,15 @@ v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client so
 
 ### 6.3 Admission / fan-out limits (HTTP implemented; UDP/fan-out planned)
 
-Phase 2는 HTTP body/header, identifier, room/record/capacity/live-grant, room/grant TTL, request-rate와 concurrency hard limit을 body work 또는 mutation 전에 적용했다. Phase 3는 active challenge/binding, total datagram, pre-auth canonical source, bound session, room, process 각 층의 packet/byte token bucket과 room/process fan-out write/byte circuit breaker를 구현해 SAFE-01~03을 닫는다.
+Phase 2는 HTTP body/header, identifier, room/record/capacity/live-grant, room/grant TTL, request-rate와 concurrency hard limit을 body work 또는 mutation 전에 적용했다. Phase 3는 active challenge/binding, total datagram, pre-auth canonical source + 별도 pre-auth process, authenticated session/room/process packet·byte bucket과 room/process fan-out write·byte bucket을 구현해 SAFE-01~03을 닫는다. 정확한 후보 수치와 charging class는 [ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)에 있으며 아직 미승인이다.
 
-pre-auth source key는 port를 제외한 IPv4 `/32` 또는 IPv6 `/64` prefix다. source bucket table은 기본 4096 entries와 60초 idle TTL로 bounded하며 sweeper가 제거한다. table이 가득 차면 새 key의 HELLO는 새 state를 만들지 않고 침묵한다. 이 단순 정책의 ceiling은 table-fill 동안 신규 source admission 저하이며, Phase 7에서 실제 문제가 확인될 때만 fixed-shard admission으로 바꾼다.
+pre-auth source key는 port를 제외한 IPv4 `/32` 또는 IPv6 `/64` prefix다. source bucket table은 fixed 4096 entries이고 record는 `now >= last_observed + 60s`에 논리 만료한다. 새 packet access는 sweeper가 아직 돌지 않았어도 만료 record를 먼저 제거하고 new-source path를 적용하며, access가 없으면 다음 1초 sweep 안에 물리 제거한다. `60s-1ns`의 기존 source는 거부되거나 rate-limited인 pre-auth datagram도 `last_observed`를 갱신하되 token을 부분 소비하거나 burst를 reset하지 않는다. capacity가 남은 새 source record는 source+pre-auth-process group이 모두 통과한 뒤에만 생기며, table이 가득 찬 새 key는 source state를 만들지 않고 pre-auth process-global만 가능한 만큼 소비한 뒤 `rate_limited`로 침묵한다. 이 단순 정책의 ceiling은 기존 source가 traffic으로 entry를 계속 유지할 수 있고 table-fill 동안 신규 source admission이 저하된다는 점이며, Phase 7에서 실제 문제가 확인될 때만 fixed-shard admission으로 바꾼다.
 
-fan-out cost는 recipient 수와 `output_bytes * recipient_count`로 미리 계산한다. 하나라도 budget을 넘으면 write 전에 `fanout_limited`로 전체 packet을 drop한다. socket은 UDP loop만 소유하고 raw `WriteTo`를 외부에 노출하지 않는다. CHALLENGE, BOUND와 single response helper는 매 write 전에, fan-out helper는 batch 전에 `SetWriteDeadline(now + udp_write_timeout)`을 반드시 다시 설정한다. deadline은 Go에서 persistent하므로 다음 outbound helper가 항상 새 deadline으로 덮어쓴다. fan-out deadline/error 뒤 남은 recipient writes를 포기하고 retry·queue·즉시 session eviction 없이 recipient 단위 `fanout_write_errors`만 집계한다. numeric traffic defaults는 Phase 3의 명시적 open decision이다.
+fan-out cost는 planned recipient 수와 `output_bytes * planned_recipient_count`로 미리 계산한다. 하나라도 budget을 넘으면 write 전에 `fanout_limited`로 전체 packet을 drop한다. fan-out token은 batch 전체를 선결제하고 첫 write error 뒤 skipped recipient를 포함해 환불하지 않지만, `fanout_write_attempts` counter는 실제 socket write call만 센다. socket은 UDP loop만 소유하고 raw `WriteTo`를 외부에 노출하지 않는다. CHALLENGE, BOUND와 single response helper는 매 write 전에, fan-out helper는 batch 전에 `SetWriteDeadline(now + udp_write_timeout)`을 반드시 다시 설정한다. deadline은 Go에서 persistent하므로 다음 outbound helper가 항상 새 deadline으로 덮어쓴다. fan-out deadline/error 뒤 남은 recipient writes를 포기하고 retry·queue·즉시 session eviction 없이 실제 실패 write만 `fanout_write_errors`로 집계한다.
 
-`ClientData` admission은 다음 순서로 선형화한다: bounded parse → read-lock binding generation/key/sender snapshot → lock 밖 HMAC 검증과 `ServerData` marshal → exclusive-lock binding/deadline 재검사 → fresh sequence를 소비 → exact output cap 검사 → 현재 recipient와 packet/byte/fan-out budget 검사·소비 및 endpoint snapshot → lock 해제 → best-effort writes. cap 또는 budget drop도 이미 인증된 sequence를 소비해 같은 datagram의 반복 작업을 막지만 room/session lifecycle은 변경하지 않는다. 두 번째 lock 전에 binding이 바뀌면 `wrong_endpoint` 또는 `revoked`로 폐기한다.
+`ClientData` admission은 다음 순서로 선형화한다: bounded parse → exclusive-lock binding generation/exact endpoint/room·session/deadline/HMAC 검사 → replay freshness 분류 → authenticated session+room+process ingress group preflight → fresh sequence는 ingress 허용 여부와 무관하게 소비하고, replay packet은 window를 바꾸지 않음 → ingress group이 허용되면 원자 소비하고 authoritative sender snapshot 반환 → lock 밖 `ServerData` marshal과 exact output cap 검사 → exclusive-lock generation/deadline 재검사 → 현재 recipient 계산 → room+process fan-out group 원자 소비 및 endpoint snapshot → lock 해제 → best-effort writes. output/fan-out/concurrent lifecycle drop은 ingress를 환불하지 않는다. fan-out group rejection은 fan-out token을 소비하지 않는다. `Ping`도 같은 HMAC/replay/authenticated-ingress 규칙을 사용하지만 marshal/fan-out 단계는 없다.
+
+Malformed/oversized/unsupported, HELLO/AUTH, unknown/wrong/expired/revoked/bad-HMAC bound-like input은 각각 pre-auth group을 정확히 한 번 사용하며 authenticated group과 이중 과금하지 않는다. 대응 group이 거부하면 `rate_limited`가 원래 drop reason보다 우선하고, 허용되면 원래 bounded reason을 기록한다. HMAC-valid duplicate/too-old ClientData/Ping은 authenticated ingress를 시도하고, 성공 시 token을 소비한 뒤 `replay`로 drop한다. 모든 rejected/dropped input datagram은 정확히 한 `drop_reasons` key에만 합산되고 성공 input은 어떤 drop reason에도 합산되지 않는다. over-cap/truncated datagram은 원래 길이를 알 수 없으면 관찰 가능한 `1201` bytes를 pre-auth byte cost로 사용한다.
 
 ## 7. Security threat boundary
 
@@ -551,20 +553,20 @@ strict JSON config file의 일반 값 우선순위는 CLI flag > `RELAY_*` envir
 |---|---|
 | listener | `management_mode`, `management_listen`, `relay_network`, `relay_listen`, `advertised_host`, `advertised_port` |
 | secrets | `RELAY_OPERATOR_TOKEN` xor `RELAY_OPERATOR_TOKEN_FILE` |
-| lifecycle | `max_room_ttl`, `max_grant_ttl`, `challenge_ttl`, `binding_ttl`, `sweep_interval`, `empty_grace`, `tombstone_ttl`, `source_bucket_idle_ttl`, `drain_grace`, `shutdown_timeout` |
-| capacity | `max_rooms`, `max_room_records`, `max_room_capacity`, `max_active_sessions`, `max_pending_challenges`, `max_source_buckets` |
-| traffic | `management_request_rate`, `management_request_burst`, `preauth_source_packet_rate`, `preauth_source_packet_burst`, `preauth_source_byte_rate`, `preauth_source_byte_burst`, `session_packet_rate`, `session_packet_burst`, `session_byte_rate`, `session_byte_burst`, `room_packet_rate`, `room_packet_burst`, `room_byte_rate`, `room_byte_burst`, `global_packet_rate`, `global_packet_burst`, `global_byte_rate`, `global_byte_burst`, `room_fanout_write_rate`, `room_fanout_write_burst`, `room_fanout_byte_rate`, `room_fanout_byte_burst`, `global_fanout_write_rate`, `global_fanout_write_burst`, `global_fanout_byte_rate`, `global_fanout_byte_burst`, `udp_write_timeout` |
+| lifecycle | `max_room_ttl`, `max_grant_ttl`, `challenge_ttl`, `binding_ttl`, `sweep_interval`, `empty_grace`, `tombstone_ttl`, `drain_grace`, `shutdown_timeout` |
+| capacity | `max_rooms`, `max_room_records`, `max_room_capacity`, `max_active_sessions` |
+| traffic | `management_request_rate`, `management_request_burst`, `preauth_source_packet_rate`, `preauth_source_packet_burst`, `preauth_source_byte_rate`, `preauth_source_byte_burst`, `preauth_global_packet_rate`, `preauth_global_packet_burst`, `preauth_global_byte_rate`, `preauth_global_byte_burst`, `session_packet_rate`, `session_packet_burst`, `session_byte_rate`, `session_byte_burst`, `room_packet_rate`, `room_packet_burst`, `room_byte_rate`, `room_byte_burst`, `authenticated_global_packet_rate`, `authenticated_global_packet_burst`, `authenticated_global_byte_rate`, `authenticated_global_byte_burst`, `room_fanout_write_rate`, `room_fanout_write_burst`, `room_fanout_byte_rate`, `room_fanout_byte_burst`, `global_fanout_write_rate`, `global_fanout_write_burst`, `global_fanout_byte_rate`, `global_fanout_byte_burst`, `udp_write_timeout` |
 | operation | log level/format, config file path |
 
 [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)로 승인된 D-03 compiled default/hard maximum은 max open rooms `256`, total resident room records `4096`, room capacity `16`, active sessions/live grants `4096`, request-required room/grant TTL 각각 최대 `2h`, sweep `1s`, empty grace `5s`, tombstone TTL `60s`다. total record는 open, empty-grace, terminal/pre-sweep와 tombstone을 포함한 모든 non-absent record를 계산한다. room/participant/session ID는 `1..64` ASCII bytes와 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`를 모두 만족하고 arbitrary metadata는 없으며 unknown JSON field는 거부한다. HTTP 상한은 `MaxHeaderBytes=16 KiB`, body `64 KiB`, read-header `2s`, read/write `5s`, idle `30s`, global `20 requests/s` burst `40`, concurrent handlers `32`다. 모든 configurable D-03 default는 동일한 hard maximum이며 향후 설정은 양의 유한한 값으로 상한만 낮출 수 있고 `0`, unlimited 또는 다른 disable 값을 허용하지 않는다. HTTP limiter 또는 semaphore admission 실패는 body를 읽기 전에 `429 rate_limited`다.
 
-D-03 밖의 현재 planned default는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, challenge TTL `3s`, binding TTL `60s`, source buckets `4096`/idle `60s`, drain grace `250ms`, shutdown `5s`, UDP write `2ms`/hard max `20ms`다. UDP traffic rate/burst와 fan-out budget 후보는 미승인이며 Product + Security + Operations owner의 D-04 승인 전까지 Phase 3 구현을 시작하지 않는다.
+D-03 밖의 현재 planned default는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, drain grace `250ms`, shutdown `5s`다. Challenge/binding/source/write lifetime과 UDP traffic/fan-out 수치는 [ADR 0003 제안](./decisions/0003-m1-udp-admission-and-fanout-policy.md)에 모았으며, Product + Security + Operations owner의 명시 승인 전까지 Phase 3 구현을 시작하지 않는다.
 
-`udp4`는 IPv4 listen address와 advertised A record만, `udp6`는 IPv6 listen address와 advertised AAAA record만 허용한다. 한 process에서 dual-stack 두 socket을 열거나 OS별 mapped-address 동작에 의존하지 않는다. Phase 4는 server를 각 mode로 별도 실행해 승인된 IPv4/IPv6/NAT64 matrix를 검증한다.
+`udp4`는 IPv4 listen address와 advertised A record만, `udp6`는 IPv6 listen address와 advertised AAAA record만 허용한다. 한 process에서 dual-stack 두 socket을 열거나 OS별 mapped-address 동작에 의존하지 않는다. Phase 4는 D-05에서 승인된 network mode만 별도 server 실행으로 native 검증하고, 실제 network evidence가 없는 mode는 지원 범위에서 명시적으로 제외한다.
 
 operator token은 CSPRNG 32 bytes를 unpadded base64url로 인코딩한 정확히 43 ASCII characters(`[A-Za-z0-9_-]{43}`)다. file source에서 한 개의 trailing LF와 optional preceding CR만 제거하며 env value는 그대로 사용한다. 두 source가 함께 있거나 secret file 권한이 group/other-readable이면 startup 실패다. rotation은 restart가 필요하고 모든 room/grant state를 잃으므로 runbook이 새 allocation 순서를 포함한다. loopback mode의 non-loopback bind, container mode의 non-wildcard bind, chosen UDP family와 맞지 않는 listen/advertised DNS, missing/invalid secret, impossible TTL ordering 또는 non-positive limit은 socket open 전 safe error와 non-zero exit로 실패한다. Relay는 host publish를 볼 수 없으므로 Docker rehearsal이 `127.0.0.1:hostPort:containerPort/tcp`와 외부 비도달성을 검사한다.
 
-Phase 2는 store `Limits`와 HTTP `Config`에서 control hard maximum validation을 구현했다. Phase 3은 승인된 UDP limit을 추가하고, Phase 5의 OPS-01은 이 값을 새로 발명하지 않고 flag/env/file loading, precedence, redacted error와 lifecycle composition으로 연결한다.
+Phase 2는 store `Limits`와 HTTP `Config`에서 control hard maximum validation을 구현했다. Phase 3은 승인된 UDP limit, 최소 HTTP+UDP+sweeper composition과 `cmd/relay`를 추가해 M1 단일-binary 증거를 가능하게 한다. Phase 5의 OPS-01은 이 값을 새로 발명하지 않고 full flag/env/file loading, precedence, status, redacted operational error와 drain lifecycle로 확장한다.
 
 ### 8.2 Planned observability
 
@@ -603,7 +605,7 @@ Phase 2는 아래 unit/HTTP/race 전략 중 room/grant store와 room-control HTT
 | fuzz | bounded Protobuf decoder, canonical transcript/state transition, arbitrary/max+1 datagram; panic·unbounded allocation 없음 |
 | race | store + HTTP + real UDP churn, expiry, DELETE/rebind와 in-flight fan-out을 `go test -race`로 검증 |
 | Go <-> C# golden fixture | **Phase 1 passed:** 같은 `.proto`의 양방향 encode/decode, 1200/900-byte worst-case fixture, HMAC/KDF known-answer vector와 breaking check. [Evidence](./evidence/m1/phase-1.md) |
-| Unity native | 승인된 PC target 1개 + Android/iOS 중 mobile target 1개의 Mono/IL2CPP build, 2-client exchange, cancellation, 20회 pause/resume, hostname, udp4/udp6 BOUND source pinning과 승인된 IPv4/IPv6/NAT64 matrix |
+| Unity native | 승인된 PC target 1개 + Android/iOS 중 mobile target 1개의 Mono/IL2CPP build, 2-client exchange, cancellation, 20회 pause/resume, hostname, 승인된 mode의 BOUND source pinning·wrong-source rejection과 D-05 network matrix; 미검증 mode는 explicit unsupported |
 | load + soak | checked-in independent Go client, named host/workload, 세 번 반복, tail latency/loss/resource report, source limiter와 write deadline saturation |
 | failure drill | invalid config/secret permission, port conflict, owned-loop/CSPRNG failure, kill/restart/token rotation, expired-grant storm, malformed/oversized flood, NIC/CPU saturation과 bounded recovery |
 
@@ -633,7 +635,7 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 | UNITY-01 | Unity RelayClient sample | Phase 4 | Pending |
 | UNITY-02 | Unity lifecycle/rebind/reallocation flow | Phase 4 | Pending |
 | UNITY-03 | address-family-neutral socket + target matrix | Phase 4 | Pending |
-| OPS-01 | typed config loader/precedence + composition root | Phase 5 | Pending |
+| OPS-01 | typed config loader/precedence + minimal composition root 확장 | Phase 5 | Pending |
 | OPS-02 | lifecycle + authenticated `/v1/status` | Phase 5 | Pending |
 | OPS-03 | `slog` + bounded aggregate counters | Phase 5 | Pending |
 | OPS-04 | signal/drain/shutdown coordinator | Phase 5 | Pending |
@@ -656,8 +658,8 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 | transport threat acceptance | **Accepted:** off-path ingress spoof/replay와 exact-source-only downstream baseline; confidentiality, 완전한 on-path/downstream integrity, traffic-analysis protection 제외; replay window 64-bit. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Product + Protocol & Security owners |
 | wire caps | **Accepted:** revision 1, datagram 1200, payload 900, ID 64 bytes; measured ClientData/ServerData 1103/1117 bytes. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Protocol & Network validation owner |
 | control/lifecycle policy | **Accepted:** compiled defaults = hard maxima; open rooms/records/capacity/sessions `256`/`4096`/`16`/`4096`, request-required room/grant TTL max `2h`, sweep/empty/tombstone `1s`/`5s`/`60s`, fixed ID·HTTP bounds and cleanup 상한. [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md) | Phase 2 | Product + Room/Session kernel owners |
-| packet policy defaults | replay window는 D-01에서 64-bit로 확정. source/session/room/global packet·byte rates와 fan-out budget 후보는 미승인이며 Product + Security + Operations owner가 승인할 때까지 Phase 3 implementation을 block하는 D-04 open decision | Phase 3 | Product + Security + Operations + UDP Relay owners |
-| Unity support matrix | Unity 6.3 LTS baseline; exact editor patch/device/Mono/IL2CPP/IPv6 matrix 미주장 | Phase 4 | Unity integration owner |
+| packet policy defaults | replay window는 D-01에서 64-bit로 확정. process-global pre-auth를 포함한 source/session/room/process packet·byte와 fan-out budget 및 3-stage charging은 [ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)에 제안됐지만 미승인이며, owner 승인까지 Phase 3 implementation을 block한다. | Phase 3 | Product + Security + Operations owners |
+| Unity support matrix | [Phase 4 계획](./superpowers/plans/2026-08-09-phase-4-unity-native-integration.md)은 Unity `6000.3.20f1`, Mac ARM64 Mono, physical Android ARM64 IL2CPP, IPv4 Wi-Fi를 제안한다. D-05 승인·설치·실기기 증거 전에는 미지원이다. | Phase 4 | Product + Unity integration owners |
 | health/drain timing | status transition, planned drain 250ms와 shutdown 5s를 승인하거나 더 낮은 bounded 값으로 조정 | Phase 5 | Operations + Lifecycle owners |
 | deployment profile | Linux host/GOARCH, Docker host-loopback publish와 원격 TLS proxy/SSH 방식, resource limits | Phase 6 | Product + Operations owners |
 | reference load and variable thresholds | named host/workload와 latency/loss/throughput/soak gate를 측정 전 선언; PRD의 RSS 20MB, CPU 2%, startup p95 50ms 목표는 여기서 변경 불가 | Phase 7 | Product + Performance owners |
