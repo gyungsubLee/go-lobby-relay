@@ -267,7 +267,7 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 | `grant_secret` | base64url string | 32 random bytes, no padding; live grant의 PUT response에서만 노출 |
 | `grants[].state` | enum | `issued`, `bound`, `expired`, `revoked` |
 
-동일 `room_id`의 **open room**에 동일 immutable definition을 재시도하면 state를 새로 만들지 않고 `200`을 반환한다. live grant는 같은 secret/expiry를 반환한다. open room 안의 terminal grant를 재발급하거나 TTL을 연장하지 않으며 해당 항목은 secret을 생략한다. 다른 capacity, expiry, participant/session set 또는 grant expiry는 `409 conflict`다. room 자체가 terminal/tombstoned 상태면 정의가 같아도 `409 conflict`이며 새 allocation에는 새 `room_id`가 필요하다. bounded tombstone은 지연된 재시도를 막는 안전창이지 영구 ID registry가 아니다. v1은 participant/session tuple마다 grant 하나, pending challenge 최대 하나, active binding 최대 하나를 허용한다.
+동일 `room_id`의 **open room**에 동일 immutable definition을 재시도하면 state를 새로 만들지 않고 `200`을 반환한다. live grant는 같은 secret/expiry를 반환한다. open room 안의 terminal grant를 재발급하거나 TTL을 연장하지 않으며 해당 항목은 secret을 생략한다. 다른 capacity, expiry, participant/session set 또는 grant expiry는 `409 conflict`다. room 자체가 terminal이거나 `now < tombstone_deadline`인 live tombstone이면 정의가 같아도 `409 conflict`이며 정상적인 새 allocation은 새 `room_id`를 사용한다. tombstone deadline부터 server는 same-ID record를 absent로 취급해 재생성을 막지 않지만 caller는 ID를 의도적으로 재사용하지 않는다. bounded tombstone은 지연된 재시도를 막는 안전창이지 영구 ID registry가 아니다. v1은 participant/session tuple마다 grant 하나, pending challenge 최대 하나, active binding 최대 하나를 허용한다.
 
 ### 4.5 `GET /v1/rooms/{room_id}` (planned)
 
