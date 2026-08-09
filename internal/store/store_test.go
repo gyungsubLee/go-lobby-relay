@@ -1,10 +1,13 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -690,12 +693,834 @@ func TestCreateRoomRandomReadFailuresRollbackAtomically(t *testing.T) {
 	}
 }
 
+func TestGetRoomReturnsSecretFreeImmutableMonotonicSnapshots(t *testing.T) {
+	baseMono := 100 * time.Second
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: baseMono}}
+	random := newScriptedReader(
+		filled(0x11, 16), filled(0x21, 32),
+		filled(0x12, 16), filled(0x22, 32),
+	)
+	store := newTestStore(t, DefaultLimits(), clock, random)
+	definition := RoomDefinition{
+		Capacity:  2,
+		ExpiresAt: testWall.Add(2 * time.Hour),
+		Participants: []ParticipantDefinition{
+			{ParticipantID: "bob", SessionID: "session-b", GrantExpiresAt: testWall.Add(90 * time.Minute)},
+			{ParticipantID: "alice", SessionID: "session-a", GrantExpiresAt: testWall.Add(time.Hour)},
+		},
+	}
+	allocation, created, err := store.CreateRoom("room", definition)
+	if err != nil || !created {
+		t.Fatalf("CreateRoom() = (_, %t, %v), want created", created, err)
+	}
+	initialReads := len(random.calls)
+
+	assertSnapshotTypeHasNoSecrets(t)
+	snapshot, err := store.GetRoom("room")
+	if err != nil {
+		t.Fatalf("GetRoom(): %v", err)
+	}
+	if snapshot.RoomID != "room" || snapshot.CreatedAt != testWall || snapshot.ExpiresAt != definition.ExpiresAt.UTC() ||
+		snapshot.Capacity != 2 || len(snapshot.Participants) != 2 {
+		t.Fatalf("snapshot header = %#v", snapshot)
+	}
+	assertSnapshotParticipant(t, snapshot.Participants[0], "alice", "session-a", testWall.Add(time.Hour), GrantStateIssued, BindingStateUnbound)
+	assertSnapshotParticipant(t, snapshot.Participants[1], "bob", "session-b", testWall.Add(90*time.Minute), GrantStateIssued, BindingStateUnbound)
+
+	snapshot.RoomID = "mutated"
+	snapshot.Capacity = 99
+	snapshot.Participants[0].ParticipantID = "mutated"
+	snapshot.Participants = append(snapshot.Participants, ParticipantSnapshot{})
+	second, err := store.GetRoom("room")
+	if err != nil {
+		t.Fatalf("second GetRoom(): %v", err)
+	}
+	if second.RoomID != "room" || second.Capacity != 2 || len(second.Participants) != 2 || second.Participants[0].ParticipantID != "alice" {
+		t.Fatalf("snapshot shares mutable storage: %#v", second)
+	}
+
+	clock.reading = ClockReading{Wall: testWall.Add(24 * time.Hour), Mono: baseMono + 30*time.Minute}
+	if _, err := store.GetRoom("room"); err != nil {
+		t.Fatalf("forward wall jump ended monotonic room: %v", err)
+	}
+
+	clock.reading = ClockReading{Wall: testWall.Add(-24 * time.Hour), Mono: baseMono + time.Hour}
+	partial, err := store.GetRoom("room")
+	if err != nil {
+		t.Fatalf("partial-expiry GetRoom(): %v", err)
+	}
+	assertSnapshotParticipant(t, partial.Participants[0], "alice", "session-a", testWall.Add(time.Hour), GrantStateExpired, BindingStateExpired)
+	assertSnapshotParticipant(t, partial.Participants[1], "bob", "session-b", testWall.Add(90*time.Minute), GrantStateIssued, BindingStateUnbound)
+	retry, created, err := store.CreateRoom("room", definition)
+	if err != nil || created {
+		t.Fatalf("partial-expiry retry = (_, %t, %v), want existing", created, err)
+	}
+	if retry.Grants[0].GrantID != allocation.Grants[0].GrantID || retry.Grants[0].GrantSecret != nil || retry.Grants[0].State != GrantStateExpired {
+		t.Fatalf("expired grant changed on retry: %#v", retry.Grants[0])
+	}
+	if retry.Grants[1].GrantID != allocation.Grants[1].GrantID || retry.Grants[1].GrantSecret == nil || retry.Grants[1].State != GrantStateIssued {
+		t.Fatalf("live grant changed on retry: %#v", retry.Grants[1])
+	}
+	if len(random.calls) != initialReads {
+		t.Fatalf("Get/retry used randomness: calls=%v", random.calls)
+	}
+
+	clock.reading = ClockReading{Wall: testWall.Add(48 * time.Hour), Mono: baseMono + 90*time.Minute - time.Nanosecond}
+	if _, err := store.GetRoom("room"); err != nil {
+		t.Fatalf("GetRoom(final deadline - 1ns): %v", err)
+	}
+	clock.reading = ClockReading{Wall: testWall.Add(-48 * time.Hour), Mono: baseMono + 90*time.Minute}
+	if _, err := store.GetRoom("room"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetRoom(final deadline) error = %v, want ErrNotFound", err)
+	}
+	if _, _, err := store.CreateRoom("room", definition); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateRoom(final deadline) error = %v, want ErrConflict", err)
+	}
+	if len(random.calls) != initialReads {
+		t.Fatalf("terminal access used randomness: calls=%v", random.calls)
+	}
+	assertStoreCounts(t, store, 1, 2, 1, 2)
+}
+
+func TestGetRoomDeniesExactRoomDeadlineDespiteWallJumps(t *testing.T) {
+	baseMono := 7 * time.Second
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: baseMono}}
+	random := newScriptedReader(filled(0x31, 16), filled(0x41, 32))
+	store := newTestStore(t, DefaultLimits(), clock, random)
+	definition := RoomDefinition{
+		Capacity:  1,
+		ExpiresAt: testWall.Add(time.Hour),
+		Participants: []ParticipantDefinition{{
+			ParticipantID:  "participant",
+			SessionID:      "session",
+			GrantExpiresAt: testWall.Add(time.Hour),
+		}},
+	}
+	if _, _, err := store.CreateRoom("room", definition); err != nil {
+		t.Fatalf("CreateRoom(): %v", err)
+	}
+	clock.reading = ClockReading{Wall: testWall.Add(24 * time.Hour), Mono: baseMono + time.Hour - time.Nanosecond}
+	if _, err := store.GetRoom("room"); err != nil {
+		t.Fatalf("GetRoom(room deadline - 1ns): %v", err)
+	}
+	clock.reading = ClockReading{Wall: testWall.Add(-24 * time.Hour), Mono: baseMono + time.Hour}
+	if _, err := store.GetRoom("room"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetRoom(room deadline) error = %v, want ErrNotFound", err)
+	}
+	if _, _, err := store.CreateRoom("room", definition); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateRoom(room deadline) error = %v, want ErrConflict", err)
+	}
+	if _, err := store.GetRoom("missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetRoom(missing) error = %v, want ErrNotFound", err)
+	}
+	assertStoreCounts(t, store, 1, 1, 1, 1)
+}
+
+func TestEndRoomRevokesKnownRoomAndIsIdempotent(t *testing.T) {
+	limits := DefaultLimits()
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 50 * time.Second}}
+	random := newScriptedReader(
+		filled(0x51, 16), filled(0x61, 32),
+		filled(0x52, 16), filled(0x62, 32),
+	)
+	store := newTestStore(t, limits, clock, random)
+	definition := validDefinition(testWall, 2)
+	if _, _, err := store.CreateRoom("room", definition); err != nil {
+		t.Fatalf("CreateRoom(): %v", err)
+	}
+	store.mu.RLock()
+	oldGrants := append([]*grantRecord(nil), store.roomsByID["room"].grants...)
+	store.mu.RUnlock()
+
+	if err := store.EndRoom("room"); err != nil {
+		t.Fatalf("EndRoom(): %v", err)
+	}
+	wantDeadline := 50*time.Second + limits.TombstoneTTL
+	assertTombstoneOnly(t, store, "room", wantDeadline)
+	assertStoreCounts(t, store, 1, 0, 0, 0)
+	for _, grant := range oldGrants {
+		if grant.state != GrantStateRevoked || grant.secret != nil {
+			t.Fatalf("revoked grant retained state/secret: %#v", grant)
+		}
+	}
+	if _, err := store.GetRoom("room"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetRoom(ended) error = %v, want ErrNotFound", err)
+	}
+	reads := len(random.calls)
+	if _, _, err := store.CreateRoom("room", definition); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateRoom(tombstone) error = %v, want ErrConflict", err)
+	}
+	if len(random.calls) != reads {
+		t.Fatalf("tombstone conflict used randomness: calls=%v", random.calls)
+	}
+
+	clock.reading.Mono++
+	if err := store.EndRoom("room"); err != nil {
+		t.Fatalf("repeated EndRoom(): %v", err)
+	}
+	store.Expire()
+	assertTombstoneOnly(t, store, "room", wantDeadline)
+	if err := store.EndRoom("never-existed"); err != nil {
+		t.Fatalf("EndRoom(missing): %v", err)
+	}
+	assertStoreCounts(t, store, 1, 0, 0, 0)
+
+	clock.reading.Mono = wantDeadline
+	if err := store.EndRoom("room"); err != nil {
+		t.Fatalf("EndRoom(stale tombstone): %v", err)
+	}
+	assertStoreCounts(t, store, 0, 0, 0, 0)
+}
+
+func TestExpireReleasesPartialAndFinalGrantAccountingExactlyOnce(t *testing.T) {
+	limits := DefaultLimits()
+	baseMono := 10 * time.Second
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: baseMono}}
+	random := newScriptedReader(
+		filled(0x71, 16), filled(0x81, 32),
+		filled(0x72, 16), filled(0x82, 32),
+	)
+	store := newTestStore(t, limits, clock, random)
+	definition := RoomDefinition{
+		Capacity:  2,
+		ExpiresAt: testWall.Add(2 * time.Hour),
+		Participants: []ParticipantDefinition{
+			{ParticipantID: "alice", SessionID: "session-a", GrantExpiresAt: testWall.Add(time.Hour)},
+			{ParticipantID: "bob", SessionID: "session-b", GrantExpiresAt: testWall.Add(90 * time.Minute)},
+		},
+	}
+	allocation, _, err := store.CreateRoom("room", definition)
+	if err != nil {
+		t.Fatalf("CreateRoom(): %v", err)
+	}
+	store.mu.RLock()
+	alice := store.roomsByID["room"].grants[0]
+	bob := store.roomsByID["room"].grants[1]
+	store.mu.RUnlock()
+
+	clock.reading.Mono = baseMono + time.Hour - time.Nanosecond
+	store.Expire()
+	assertStoreCounts(t, store, 1, 2, 1, 2)
+
+	clock.reading.Mono = baseMono + time.Hour
+	store.Expire()
+	if alice.state != GrantStateExpired || alice.secret != nil || bob.state != GrantStateIssued || bob.secret == nil {
+		t.Fatalf("partial expiry state = alice:%#v bob:%#v", alice, bob)
+	}
+	assertStoreCounts(t, store, 1, 1, 1, 1)
+	partial, err := store.GetRoom("room")
+	if err != nil {
+		t.Fatalf("GetRoom(partial expiry): %v", err)
+	}
+	assertSnapshotParticipant(t, partial.Participants[0], "alice", "session-a", testWall.Add(time.Hour), GrantStateExpired, BindingStateExpired)
+	assertSnapshotParticipant(t, partial.Participants[1], "bob", "session-b", testWall.Add(90*time.Minute), GrantStateIssued, BindingStateUnbound)
+	retry, created, err := store.CreateRoom("room", definition)
+	if err != nil || created || retry.Grants[0].GrantID != allocation.Grants[0].GrantID ||
+		retry.Grants[0].GrantSecret != nil || retry.Grants[0].State != GrantStateExpired ||
+		retry.Grants[1].GrantID != allocation.Grants[1].GrantID || retry.Grants[1].GrantSecret == nil {
+		t.Fatalf("retry after physical partial expiry = (_, %t, %v, %#v)", created, err, retry)
+	}
+	store.Expire()
+	assertStoreCounts(t, store, 1, 1, 1, 1)
+
+	finalDeadline := baseMono + 90*time.Minute
+	clock.reading.Mono = finalDeadline
+	if _, err := store.GetRoom("room"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetRoom(final grant deadline) error = %v, want ErrNotFound", err)
+	}
+	if _, _, err := store.CreateRoom("room", definition); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateRoom(final grant deadline) error = %v, want ErrConflict", err)
+	}
+	assertStoreCounts(t, store, 1, 1, 1, 1)
+
+	clock.reading.Mono = finalDeadline + 2*time.Second
+	store.Expire()
+	if bob.state != GrantStateExpired || bob.secret != nil {
+		t.Fatalf("final grant was not cleared: %#v", bob)
+	}
+	assertRoomState(t, store, "room", roomStateEmpty)
+	assertStoreCounts(t, store, 1, 0, 0, 0)
+	store.Expire()
+	assertStoreCounts(t, store, 1, 0, 0, 0)
+
+	emptyDeadline := finalDeadline + limits.EmptyGrace
+	clock.reading.Mono = emptyDeadline - time.Nanosecond
+	store.Expire()
+	assertRoomState(t, store, "room", roomStateEmpty)
+	clock.reading.Mono = emptyDeadline
+	store.Expire()
+	assertTombstoneOnly(t, store, "room", emptyDeadline+limits.TombstoneTTL)
+	assertStoreCounts(t, store, 1, 0, 0, 0)
+	assertStoreInvariants(t, store)
+}
+
+func TestExpireUsesEarlierRoomTTLOrAnchoredEmptyGrace(t *testing.T) {
+	tests := []struct {
+		name             string
+		roomTTL          time.Duration
+		grantTTL         time.Duration
+		emptyGrace       time.Duration
+		physicalDeadline time.Duration
+	}{
+		{"room TTL earlier", 10 * time.Second, 8 * time.Second, 5 * time.Second, 10 * time.Second},
+		{"room TTL equals empty deadline", 10 * time.Second, 5 * time.Second, 5 * time.Second, 10 * time.Second},
+		{"empty grace earlier", 20 * time.Second, 5 * time.Second, 5 * time.Second, 10 * time.Second},
+		{"lower configured empty grace", 20 * time.Second, 5 * time.Second, 2 * time.Second, 7 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.EmptyGrace = tt.emptyGrace
+			clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+			random := newScriptedReader(filled(0x91, 16), filled(0xa1, 32))
+			store := newTestStore(t, limits, clock, random)
+			definition := RoomDefinition{
+				Capacity:  1,
+				ExpiresAt: testWall.Add(tt.roomTTL),
+				Participants: []ParticipantDefinition{{
+					ParticipantID:  "participant",
+					SessionID:      "session",
+					GrantExpiresAt: testWall.Add(tt.grantTTL),
+				}},
+			}
+			if _, _, err := store.CreateRoom("room", definition); err != nil {
+				t.Fatalf("CreateRoom(): %v", err)
+			}
+
+			clock.reading.Mono = tt.grantTTL
+			store.Expire()
+			if tt.grantTTL < tt.roomTTL {
+				assertRoomState(t, store, "room", roomStateEmpty)
+			}
+			clock.reading.Mono = tt.physicalDeadline - time.Nanosecond
+			store.Expire()
+			assertRoomState(t, store, "room", roomStateEmpty)
+			clock.reading.Mono = tt.physicalDeadline
+			store.Expire()
+			assertTombstoneOnly(t, store, "room", tt.physicalDeadline+limits.TombstoneTTL)
+			assertStoreCounts(t, store, 1, 0, 0, 0)
+		})
+	}
+
+	t.Run("room and grant exact deadline", func(t *testing.T) {
+		clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+		store := newTestStore(t, DefaultLimits(), clock, newScriptedReader(filled(0xb1, 16), filled(0xc1, 32)))
+		definition := RoomDefinition{
+			Capacity:  1,
+			ExpiresAt: testWall.Add(10 * time.Second),
+			Participants: []ParticipantDefinition{{
+				ParticipantID:  "participant",
+				SessionID:      "session",
+				GrantExpiresAt: testWall.Add(10 * time.Second),
+			}},
+		}
+		if _, _, err := store.CreateRoom("room", definition); err != nil {
+			t.Fatalf("CreateRoom(): %v", err)
+		}
+		clock.reading.Mono = 10*time.Second - time.Nanosecond
+		store.Expire()
+		assertRoomState(t, store, "room", roomStateOpen)
+		clock.reading.Mono = 10 * time.Second
+		store.Expire()
+		assertTombstoneOnly(t, store, "room", 10*time.Second+HardMaxTombstoneTTL)
+	})
+}
+
+func TestTombstoneDeadlineAllowsExactSameIDRecreationWithoutRefresh(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxOpenRooms = 1
+	limits.MaxRoomRecords = 1
+	limits.MaxRoomCapacity = 1
+	limits.MaxActiveSessions = 1
+	limits.TombstoneTTL = 3 * time.Second
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+	random := &sequenceReader{}
+	store := newTestStore(t, limits, clock, random)
+	definition := validDefinition(testWall, 1)
+	first, _, err := store.CreateRoom("room", definition)
+	if err != nil {
+		t.Fatalf("CreateRoom(): %v", err)
+	}
+	if err := store.EndRoom("room"); err != nil {
+		t.Fatalf("EndRoom(): %v", err)
+	}
+	deadline := limits.TombstoneTTL
+	assertTombstoneOnly(t, store, "room", deadline)
+	reads := random.reads
+
+	clock.reading.Mono = deadline - time.Nanosecond
+	store.Expire()
+	if err := store.EndRoom("room"); err != nil {
+		t.Fatalf("repeated EndRoom(): %v", err)
+	}
+	assertTombstoneOnly(t, store, "room", deadline)
+	if _, _, err := store.CreateRoom("room", definition); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateRoom(deadline - 1ns) error = %v, want ErrConflict", err)
+	}
+	if random.reads != reads {
+		t.Fatalf("live tombstone used randomness: reads=%d want=%d", random.reads, reads)
+	}
+
+	clock.reading.Mono = deadline
+	second, created, err := store.CreateRoom("room", definition)
+	if err != nil || !created {
+		t.Fatalf("CreateRoom(exact tombstone deadline) = (_, %t, %v), want created", created, err)
+	}
+	if second.Grants[0].GrantID == first.Grants[0].GrantID {
+		t.Fatal("same-ID recreation reused the old grant ID")
+	}
+	assertStoreCounts(t, store, 1, 1, 1, 1)
+
+	if err := store.EndRoom("room"); err != nil {
+		t.Fatalf("EndRoom(recreated): %v", err)
+	}
+	secondDeadline := deadline + limits.TombstoneTTL
+	clock.reading.Mono = secondDeadline - time.Nanosecond
+	store.Expire()
+	assertTombstoneOnly(t, store, "room", secondDeadline)
+	clock.reading.Mono = secondDeadline
+	store.Expire()
+	assertStoreCounts(t, store, 0, 0, 0, 0)
+}
+
+func TestResidentRecordCapIncludesTerminalEmptyAndTombstoneStates(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxOpenRooms = 2
+	limits.MaxRoomRecords = 2
+	limits.MaxRoomCapacity = 1
+	limits.MaxActiveSessions = 2
+	limits.EmptyGrace = 5 * time.Second
+	limits.TombstoneTTL = 10 * time.Second
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+	random := &sequenceReader{}
+	store := newTestStore(t, limits, clock, random)
+	definition := RoomDefinition{
+		Capacity:  1,
+		ExpiresAt: testWall.Add(time.Minute),
+		Participants: []ParticipantDefinition{{
+			ParticipantID:  "participant",
+			SessionID:      "session",
+			GrantExpiresAt: testWall.Add(10 * time.Second),
+		}},
+	}
+	for _, roomID := range []string{"room-a", "room-b"} {
+		if _, _, err := store.CreateRoom(roomID, definition); err != nil {
+			t.Fatalf("CreateRoom(%s): %v", roomID, err)
+		}
+	}
+	assertStoreCounts(t, store, 2, 2, 2, 2)
+
+	clock.reading.Mono = 10 * time.Second
+	if _, _, err := store.CreateRoom("room-c", definition); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("new room with terminal pre-sweep records error = %v, want ErrCapacity", err)
+	}
+	assertStoreCounts(t, store, 2, 2, 2, 2)
+	store.Expire()
+	assertRoomState(t, store, "room-a", roomStateEmpty)
+	assertRoomState(t, store, "room-b", roomStateEmpty)
+	assertStoreCounts(t, store, 2, 0, 0, 0)
+	if _, _, err := store.CreateRoom("room-c", definition); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("new room with empty-grace residents error = %v, want ErrCapacity", err)
+	}
+
+	if err := store.EndRoom("room-b"); err != nil {
+		t.Fatalf("EndRoom(room-b): %v", err)
+	}
+	assertTombstoneOnly(t, store, "room-b", 20*time.Second)
+	if _, _, err := store.CreateRoom("room-c", definition); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("new room with tombstone resident error = %v, want ErrCapacity", err)
+	}
+
+	clock.reading.Mono = 20 * time.Second
+	store.Expire()
+	assertTombstoneOnly(t, store, "room-a", 30*time.Second)
+	if _, created, err := store.CreateRoom("room-c", definition); err != nil || !created {
+		t.Fatalf("CreateRoom after one resident removal = (_, %t, %v), want created", created, err)
+	}
+	assertStoreCounts(t, store, 2, 1, 1, 1)
+	assertStoreInvariants(t, store)
+}
+
+func TestLifecycleChurnReturnsAllStateToBaseline(t *testing.T) {
+	limits := DefaultLimits()
+	clock := &manualClock{}
+	random := &sequenceReader{}
+	store := newTestStore(t, limits, clock, random)
+	for index := range 1000 {
+		base := time.Duration(index) * (limits.TombstoneTTL + 2*time.Nanosecond)
+		clock.reading = ClockReading{Wall: testWall.Add(base), Mono: base}
+		definition := RoomDefinition{
+			Capacity:  1,
+			ExpiresAt: clock.reading.Wall.Add(time.Nanosecond),
+			Participants: []ParticipantDefinition{{
+				ParticipantID:  "participant",
+				SessionID:      "session",
+				GrantExpiresAt: clock.reading.Wall.Add(time.Nanosecond),
+			}},
+		}
+		allocation, created, err := store.CreateRoom("room", definition)
+		if err != nil || !created || allocation.Grants[0].GrantSecret == nil {
+			t.Fatalf("cycle %d CreateRoom() = (_, %t, %v)", index, created, err)
+		}
+		clock.reading.Mono += time.Nanosecond
+		store.Expire()
+		clock.reading.Mono += limits.TombstoneTTL
+		store.Expire()
+		assertStoreCounts(t, store, 0, 0, 0, 0)
+	}
+	assertStoreInvariants(t, store)
+}
+
+func TestRunSweeperUsesConfiguredIntervalAndStopsOnCancellation(t *testing.T) {
+	limits := DefaultLimits()
+	limits.SweepInterval = time.Millisecond
+	clock := &signalClock{
+		reading: ClockReading{Wall: testWall, Mono: 0},
+		called:  make(chan struct{}, 1),
+	}
+	store, err := New(Config{Limits: limits, Now: clock.now, Random: &sequenceReader{}})
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	definition := RoomDefinition{
+		Capacity:  1,
+		ExpiresAt: testWall.Add(time.Nanosecond),
+		Participants: []ParticipantDefinition{{
+			ParticipantID:  "participant",
+			SessionID:      "session",
+			GrantExpiresAt: testWall.Add(time.Nanosecond),
+		}},
+	}
+	if _, _, err := store.CreateRoom("room", definition); err != nil {
+		t.Fatalf("CreateRoom(): %v", err)
+	}
+	<-clock.called
+	clock.reading = ClockReading{Wall: testWall.Add(-time.Hour), Mono: time.Nanosecond}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		store.RunSweeper(ctx)
+		close(done)
+	}()
+	select {
+	case <-clock.called:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("RunSweeper did not call Expire within configured lower interval")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RunSweeper did not stop after cancellation")
+	}
+	assertTombstoneOnly(t, store, "room", time.Nanosecond+limits.TombstoneTTL)
+	assertStoreInvariants(t, store)
+}
+
+func TestConcurrentLifecycleMaintainsLinearizedState(t *testing.T) {
+	t.Run("identical allocation", func(t *testing.T) {
+		clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+		store := newTestStore(t, DefaultLimits(), clock, &sequenceReader{})
+		definition := validDefinition(testWall, 1)
+		type result struct {
+			allocation Allocation
+			created    bool
+			err        error
+		}
+		results := make(chan result, 32)
+		var wait sync.WaitGroup
+		for range 32 {
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				allocation, created, err := store.CreateRoom("room", definition)
+				results <- result{allocation: allocation, created: created, err: err}
+			}()
+		}
+		wait.Wait()
+		close(results)
+		createdCount := 0
+		var grantID protocol.Bytes16
+		var secret protocol.Bytes32
+		for result := range results {
+			if result.err != nil || len(result.allocation.Grants) != 1 || result.allocation.Grants[0].GrantSecret == nil {
+				t.Fatalf("concurrent CreateRoom() = %#v", result)
+			}
+			if result.created {
+				createdCount++
+				grantID = result.allocation.Grants[0].GrantID
+				secret = *result.allocation.Grants[0].GrantSecret
+			}
+		}
+		if createdCount != 1 {
+			t.Fatalf("created count = %d, want 1", createdCount)
+		}
+		retry, _, err := store.CreateRoom("room", definition)
+		if err != nil || retry.Grants[0].GrantID != grantID || *retry.Grants[0].GrantSecret != secret {
+			t.Fatalf("stable retry = %#v, %v", retry, err)
+		}
+		assertStoreInvariants(t, store)
+	})
+
+	t.Run("create get end expire race", func(t *testing.T) {
+		clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+		store := newTestStore(t, DefaultLimits(), clock, &sequenceReader{})
+		definition := validDefinition(testWall, 1)
+		if _, _, err := store.CreateRoom("room", definition); err != nil {
+			t.Fatalf("CreateRoom(): %v", err)
+		}
+		different := cloneDefinition(definition)
+		different.ExpiresAt = different.ExpiresAt.Add(time.Second)
+		errorsSeen := make(chan error, 200)
+		var wait sync.WaitGroup
+		for index := range 200 {
+			wait.Add(1)
+			go func(operation int) {
+				defer wait.Done()
+				switch operation % 5 {
+				case 0:
+					_, _, err := store.CreateRoom("room", definition)
+					if err != nil && !errors.Is(err, ErrConflict) {
+						errorsSeen <- err
+					}
+				case 1:
+					_, _, err := store.CreateRoom("room", different)
+					if !errors.Is(err, ErrConflict) {
+						errorsSeen <- errors.New("different definition did not conflict")
+					}
+				case 2:
+					_, err := store.GetRoom("room")
+					if err != nil && !errors.Is(err, ErrNotFound) {
+						errorsSeen <- err
+					}
+				case 3:
+					if err := store.EndRoom("room"); err != nil {
+						errorsSeen <- err
+					}
+				case 4:
+					store.Expire()
+				}
+			}(index)
+		}
+		wait.Wait()
+		close(errorsSeen)
+		for err := range errorsSeen {
+			t.Errorf("concurrent lifecycle: %v", err)
+		}
+		if err := store.EndRoom("room"); err != nil {
+			t.Fatalf("final EndRoom(): %v", err)
+		}
+		if _, err := store.GetRoom("room"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("final GetRoom() error = %v, want ErrNotFound", err)
+		}
+		assertTombstoneOnly(t, store, "room", DefaultLimits().TombstoneTTL)
+		assertStoreInvariants(t, store)
+	})
+
+	t.Run("resident cap race", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.MaxOpenRooms = 4
+		limits.MaxRoomRecords = 4
+		limits.MaxRoomCapacity = 1
+		limits.MaxActiveSessions = 4
+		clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+		store := newTestStore(t, limits, clock, &sequenceReader{})
+		definition := validDefinition(testWall, 1)
+		results := make(chan error, 32)
+		var wait sync.WaitGroup
+		for index := range 32 {
+			wait.Add(1)
+			go func(index int) {
+				defer wait.Done()
+				_, _, err := store.CreateRoom("room-"+strconv.Itoa(index), definition)
+				results <- err
+			}(index)
+		}
+		wait.Wait()
+		close(results)
+		created := 0
+		for err := range results {
+			switch {
+			case err == nil:
+				created++
+			case errors.Is(err, ErrCapacity):
+			default:
+				t.Fatalf("CreateRoom() error = %v", err)
+			}
+		}
+		if created != limits.MaxRoomRecords {
+			t.Fatalf("created rooms = %d, want %d", created, limits.MaxRoomRecords)
+		}
+		assertStoreInvariants(t, store)
+	})
+}
+
+type sequenceReader struct {
+	nextID uint64
+	reads  int
+}
+
+func (reader *sequenceReader) Read(buffer []byte) (int, error) {
+	reader.reads++
+	for index := range buffer {
+		buffer[index] = 0
+	}
+	switch len(buffer) {
+	case len(protocol.Bytes16{}):
+		reader.nextID++
+		value := reader.nextID
+		for index := range 8 {
+			buffer[len(buffer)-1-index] = byte(value)
+			value >>= 8
+		}
+	case len(protocol.Bytes32{}):
+		for index := range buffer {
+			buffer[index] = byte(reader.nextID)
+		}
+	default:
+		return 0, errors.New("unexpected random read size")
+	}
+	return len(buffer), nil
+}
+
+type signalClock struct {
+	reading ClockReading
+	called  chan struct{}
+}
+
+func (clock *signalClock) now() ClockReading {
+	select {
+	case clock.called <- struct{}{}:
+	default:
+	}
+	return clock.reading
+}
+
+func assertSnapshotParticipant(
+	t *testing.T,
+	participant ParticipantSnapshot,
+	participantID, sessionID string,
+	expiresAt time.Time,
+	grantState GrantState,
+	bindingState BindingState,
+) {
+	t.Helper()
+	if participant.ParticipantID != participantID || participant.SessionID != sessionID ||
+		participant.GrantExpiresAt != expiresAt.UTC() || participant.GrantState != grantState || participant.BindingState != bindingState {
+		t.Fatalf("participant snapshot = %#v, want %q/%q/%v/%q/%q",
+			participant, participantID, sessionID, expiresAt.UTC(), grantState, bindingState)
+	}
+}
+
+func assertSnapshotTypeHasNoSecrets(t *testing.T) {
+	t.Helper()
+	forbidden := []string{"secret", "key", "challenge", "grantid", "bindingid", "endpoint"}
+	for _, value := range []any{RoomSnapshot{}, ParticipantSnapshot{}} {
+		typeOf := reflect.TypeOf(value)
+		for index := range typeOf.NumField() {
+			name := strings.ToLower(typeOf.Field(index).Name)
+			for _, fragment := range forbidden {
+				if strings.Contains(name, fragment) {
+					t.Fatalf("%s contains forbidden field %s", typeOf.Name(), typeOf.Field(index).Name)
+				}
+			}
+		}
+	}
+}
+
+func assertRoomState(t *testing.T, store *Store, roomID string, want roomRecordState) {
+	t.Helper()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	record := store.roomsByID[roomID]
+	if record == nil || record.state != want {
+		t.Fatalf("room %q state = %#v, want %v", roomID, record, want)
+	}
+}
+
+func assertTombstoneOnly(t *testing.T, store *Store, roomID string, deadline time.Duration) {
+	t.Helper()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	record := store.roomsByID[roomID]
+	if record == nil {
+		t.Fatalf("room %q is absent, want tombstone", roomID)
+	}
+	if record.state != roomStateTombstone || record.tombstoneDeadline != deadline || record.capacity != 0 ||
+		!record.createdAt.IsZero() || !record.expiresAt.IsZero() || record.monoDeadline != 0 || record.grants != nil {
+		t.Fatalf("room %q retained non-tombstone state: %#v, want deadline %v", roomID, record, deadline)
+	}
+}
+
+func assertStoreInvariants(t *testing.T, store *Store) {
+	t.Helper()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if len(store.roomsByID) > store.limits.MaxRoomRecords || store.openRooms < 0 || store.activeSessions < 0 {
+		t.Fatalf("invalid bounded counters: rooms=%d open=%d active=%d", len(store.roomsByID), store.openRooms, store.activeSessions)
+	}
+	openRooms := 0
+	activeSessions := 0
+	indexed := make(map[protocol.Bytes16]*grantRecord)
+	for roomID, room := range store.roomsByID {
+		switch room.state {
+		case roomStateOpen:
+			openRooms++
+		case roomStateEmpty:
+		case roomStateTombstone:
+			if room.tombstoneDeadline == 0 || room.capacity != 0 || !room.createdAt.IsZero() ||
+				!room.expiresAt.IsZero() || room.monoDeadline != 0 || room.grants != nil {
+				t.Fatalf("tombstone %q retained room/grant data: %#v", roomID, room)
+			}
+			continue
+		default:
+			t.Fatalf("room %q has invalid state %v", roomID, room.state)
+		}
+		for _, grant := range room.grants {
+			if grant == nil {
+				t.Fatalf("room %q contains nil grant", roomID)
+			}
+			switch grant.state {
+			case GrantStateIssued, GrantStateBound:
+				activeSessions++
+				if grant.secret == nil {
+					t.Fatalf("live grant %x has no secret", grant.id)
+				}
+				indexed[grant.id] = grant
+			case GrantStateExpired, GrantStateRevoked:
+				if grant.secret != nil {
+					t.Fatalf("terminal grant %x retained a secret", grant.id)
+				}
+				if _, exists := store.grantsByID[grant.id]; exists {
+					t.Fatalf("terminal grant %x retained reverse index", grant.id)
+				}
+			default:
+				t.Fatalf("grant %x has invalid state %q", grant.id, grant.state)
+			}
+		}
+	}
+	if openRooms != store.openRooms || activeSessions != store.activeSessions || len(indexed) != len(store.grantsByID) {
+		t.Fatalf("recomputed counts = open:%d active:%d index:%d; stored = %d/%d/%d",
+			openRooms, activeSessions, len(indexed), store.openRooms, store.activeSessions, len(store.grantsByID))
+	}
+	for grantID, grant := range store.grantsByID {
+		if indexed[grantID] != grant {
+			t.Fatalf("reverse index %x points outside authoritative room grants", grantID)
+		}
+	}
+}
+
 type manualClock struct {
+	mu      sync.Mutex
 	reading ClockReading
 	calls   int
 }
 
 func (clock *manualClock) now() ClockReading {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
 	clock.calls++
 	return clock.reading
 }

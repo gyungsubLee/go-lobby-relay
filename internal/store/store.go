@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -142,12 +143,22 @@ type Store struct {
 	activeSessions int
 }
 
+type roomRecordState uint8
+
+const (
+	roomStateOpen roomRecordState = iota
+	roomStateEmpty
+	roomStateTombstone
+)
+
 type roomRecord struct {
-	capacity     uint32
-	createdAt    time.Time
-	expiresAt    time.Time
-	monoDeadline time.Duration
-	grants       []*grantRecord
+	state             roomRecordState
+	capacity          uint32
+	createdAt         time.Time
+	expiresAt         time.Time
+	monoDeadline      time.Duration
+	grants            []*grantRecord
+	tombstoneDeadline time.Duration
 }
 
 type grantRecord struct {
@@ -198,10 +209,22 @@ func (store *Store) CreateRoom(roomID string, definition RoomDefinition) (Alloca
 	reading := store.now()
 
 	if existing := store.roomsByID[roomID]; existing != nil {
-		if reading.Mono >= existing.monoDeadline || !sameDefinition(existing, canonical) {
+		switch existing.state {
+		case roomStateTombstone:
+			if reading.Mono < existing.tombstoneDeadline {
+				return Allocation{}, false, ErrConflict
+			}
+			delete(store.roomsByID, roomID)
+		case roomStateEmpty:
+			return Allocation{}, false, ErrConflict
+		case roomStateOpen:
+			if roomAccessTerminal(existing, reading.Mono) || !sameDefinition(existing, canonical) {
+				return Allocation{}, false, ErrConflict
+			}
+			return allocationAt(roomID, existing, reading.Mono), false, nil
+		default:
 			return Allocation{}, false, ErrConflict
 		}
-		return allocationAt(roomID, existing, reading.Mono), false, nil
 	}
 
 	wall := reading.Wall.UTC()
@@ -251,6 +274,7 @@ func (store *Store) CreateRoom(roomID string, definition RoomDefinition) (Alloca
 	}
 
 	record := &roomRecord{
+		state:        roomStateOpen,
 		capacity:     canonical.capacity,
 		createdAt:    wall,
 		expiresAt:    canonical.expiresAt,
@@ -264,6 +288,90 @@ func (store *Store) CreateRoom(roomID string, definition RoomDefinition) (Alloca
 	store.openRooms++
 	store.activeSessions += len(grants)
 	return allocationAt(roomID, record, reading.Mono), true, nil
+}
+
+func (store *Store) GetRoom(roomID string) (RoomSnapshot, error) {
+	if !protocol.ValidID(roomID) {
+		return RoomSnapshot{}, ErrInvalid
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	reading := store.now()
+	record := store.roomsByID[roomID]
+	if record == nil || record.state != roomStateOpen || roomAccessTerminal(record, reading.Mono) {
+		return RoomSnapshot{}, ErrNotFound
+	}
+	return snapshotAt(roomID, record, reading.Mono), nil
+}
+
+func (store *Store) EndRoom(roomID string) error {
+	if !protocol.ValidID(roomID) {
+		return ErrInvalid
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	reading := store.now()
+	record := store.roomsByID[roomID]
+	if record == nil {
+		return nil
+	}
+	if record.state == roomStateTombstone {
+		if reading.Mono >= record.tombstoneDeadline {
+			delete(store.roomsByID, roomID)
+		}
+		return nil
+	}
+	store.tombstoneRoom(record, reading.Mono, GrantStateRevoked)
+	return nil
+}
+
+func (store *Store) Expire() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := store.now().Mono
+	for roomID, room := range store.roomsByID {
+		if room.state == roomStateTombstone {
+			if now >= room.tombstoneDeadline {
+				delete(store.roomsByID, roomID)
+			}
+			continue
+		}
+
+		for _, grant := range room.grants {
+			if grantLive(grant) && now >= grant.monoDeadline {
+				store.terminalGrant(grant, GrantStateExpired)
+			}
+		}
+		if now >= room.monoDeadline {
+			store.tombstoneRoom(room, now, GrantStateExpired)
+			continue
+		}
+
+		finalGrantDeadline := lastGrantDeadline(room)
+		if now < finalGrantDeadline {
+			continue
+		}
+		if room.state == roomStateOpen {
+			room.state = roomStateEmpty
+			store.openRooms--
+		}
+		if now >= saturatingAdd(finalGrantDeadline, store.limits.EmptyGrace) {
+			store.tombstoneRoom(room, now, GrantStateExpired)
+		}
+	}
+}
+
+func (store *Store) RunSweeper(ctx context.Context) {
+	ticker := time.NewTicker(store.limits.SweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			store.Expire()
+		}
+	}
 }
 
 type normalizedDefinition struct {
@@ -361,6 +469,89 @@ func allocationAt(roomID string, room *roomRecord, now time.Duration) Allocation
 	return allocation
 }
 
+func snapshotAt(roomID string, room *roomRecord, now time.Duration) RoomSnapshot {
+	snapshot := RoomSnapshot{
+		RoomID:       roomID,
+		CreatedAt:    room.createdAt,
+		ExpiresAt:    room.expiresAt,
+		Capacity:     room.capacity,
+		Participants: make([]ParticipantSnapshot, len(room.grants)),
+	}
+	for index, grant := range room.grants {
+		state := grantStateAt(grant, now)
+		bindingState := BindingStateUnbound
+		switch state {
+		case GrantStateBound:
+			bindingState = BindingStateBound
+		case GrantStateExpired:
+			bindingState = BindingStateExpired
+		case GrantStateRevoked:
+			bindingState = BindingStateRevoked
+		}
+		snapshot.Participants[index] = ParticipantSnapshot{
+			ParticipantID:  grant.participantID,
+			SessionID:      grant.sessionID,
+			GrantExpiresAt: grant.expiresAt,
+			GrantState:     state,
+			BindingState:   bindingState,
+		}
+	}
+	return snapshot
+}
+
+func (store *Store) tombstoneRoom(room *roomRecord, now time.Duration, terminalState GrantState) {
+	if room.state == roomStateTombstone {
+		return
+	}
+	if room.state == roomStateOpen {
+		store.openRooms--
+	}
+	for _, grant := range room.grants {
+		store.terminalGrant(grant, terminalState)
+	}
+	*room = roomRecord{
+		state:             roomStateTombstone,
+		tombstoneDeadline: saturatingAdd(now, store.limits.TombstoneTTL),
+	}
+}
+
+func (store *Store) terminalGrant(grant *grantRecord, terminalState GrantState) {
+	if grantLive(grant) {
+		store.activeSessions--
+		grant.state = terminalState
+	}
+	delete(store.grantsByID, grant.id)
+	if grant.secret != nil {
+		*grant.secret = protocol.Bytes32{}
+		grant.secret = nil
+	}
+}
+
+func roomAccessTerminal(room *roomRecord, now time.Duration) bool {
+	return room.state != roomStateOpen || now >= room.monoDeadline || now >= lastGrantDeadline(room)
+}
+
+func lastGrantDeadline(room *roomRecord) time.Duration {
+	var deadline time.Duration
+	for index, grant := range room.grants {
+		if index == 0 || grant.monoDeadline > deadline {
+			deadline = grant.monoDeadline
+		}
+	}
+	return deadline
+}
+
+func grantLive(grant *grantRecord) bool {
+	return grant.state == GrantStateIssued || grant.state == GrantStateBound
+}
+
+func grantStateAt(grant *grantRecord, now time.Duration) GrantState {
+	if grantLive(grant) && now >= grant.monoDeadline {
+		return GrantStateExpired
+	}
+	return grant.state
+}
+
 func sameDefinition(room *roomRecord, definition normalizedDefinition) bool {
 	if room.capacity != definition.capacity || room.expiresAt != definition.expiresAt || len(room.grants) != len(definition.participants) {
 		return false
@@ -380,6 +571,13 @@ func deadlineAfter(now, ttl time.Duration) (time.Duration, bool) {
 		return 0, false
 	}
 	return now + ttl, true
+}
+
+func saturatingAdd(deadline, delta time.Duration) time.Duration {
+	if deadline > time.Duration(math.MaxInt64)-delta {
+		return time.Duration(math.MaxInt64)
+	}
+	return deadline + delta
 }
 
 func validLimits(limits Limits) bool {
