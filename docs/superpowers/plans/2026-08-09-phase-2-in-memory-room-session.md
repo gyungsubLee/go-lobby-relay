@@ -10,7 +10,7 @@
 
 **Foundation only:** This phase exercises HTTP/control limits and room/grant cleanup, but must not mark SAFE-01 or ROOM-03 complete; their UDP/binding portions belong to Phase 3.
 
-**Status:** In progress — Tasks 1–2/5 complete; allocation kernel completed in `1a2ba3c`.
+**Status:** In progress — Tasks 1–3/5 complete; room/grant lifecycle completed in `dc57edb`.
 
 **Commit discipline:** Before every commit below, stage only that task's owned paths, inspect `git diff --cached --name-only`, and require `git diff --cached --check` to exit 0. Never use `git add .` in the shared worktree.
 
@@ -364,7 +364,7 @@ Observed: the RED package/API compile failed as expected. Review then exposed a 
 - Modify: `internal/store/store_test.go`
 - Modify: `internal/store/store.go`
 
-- [ ] **Step 1: Write snapshot and revocation tests**
+- [x] **Step 1: Write snapshot and revocation tests**
 
 Assert `GetRoom` returns an immutable deep snapshot with no secret-bearing field. Test open, missing, exact room deadline, one expired grant while another stays live, final grant expiry, room DELETE, repeated DELETE, and unknown DELETE.
 
@@ -379,7 +379,7 @@ Required semantics:
 - terminal and live tombstone (`now < tombstoneDeadline`) PUT returns `ErrConflict` even for the old definition; at the exact tombstone deadline a new allocation is allowed before a physical sweep.
 - retrying a still-open room with one terminal grant preserves the terminal grant ID/expiry, omits its secret, consumes no randomness, and never refreshes it.
 
-- [ ] **Step 2: Write deterministic cleanup tests**
+- [x] **Step 2: Write deterministic cleanup tests**
 
 Cover:
 
@@ -395,11 +395,11 @@ Cover:
 - 1,000 create/expire/tombstone cycles return counts to baseline;
 - `RunSweeper` stops on context cancellation with no owned goroutine left.
 
-- [ ] **Step 3: Write concurrency tests**
+- [x] **Step 3: Write concurrency tests**
 
 Race concurrent identical/different create, GET, DELETE, and `Expire`. Assert one first creation, stable retry data, conflict for a different definition, no resurrection, no negative counters, no stale secrets, no resident-record overflow, and no map/index mismatch. Recompute counters and reverse indexes from the room map after race and churn cases.
 
-- [ ] **Step 4: Run RED, implement, and run GREEN**
+- [x] **Step 4: Run RED, implement, and run GREEN**
 
 Keep expiry as one bounded linear scan. No heap, timer per object, room goroutine, channel, callback, or background retry.
 
@@ -410,13 +410,15 @@ make go-test
 git diff --check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/store/store.go internal/store/store_test.go
 git diff --cached --check
 git commit -m "feat(store): expire and revoke room grants"
 ```
+
+Observed: the RED tests failed to compile on the missing lifecycle API, then focused/race/full tests, lifecycle races, store vet, formatting, and diff checks passed after implementation. Independent review found no remaining issue. Commit: `dc57edb`.
 
 ---
 
