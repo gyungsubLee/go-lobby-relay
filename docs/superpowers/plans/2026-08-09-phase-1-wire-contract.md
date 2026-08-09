@@ -4,6 +4,8 @@
 
 **Goal:** Go와 Unity C#이 공유하는 bounded Protobuf 계약, 재현 가능한 생성·breaking 검사, byte-exact HMAC/호환성 fixture와 승인된 M1 위협 경계를 완성한다.
 
+**Status:** Complete — 1/1 plan, 4/4 tasks; [ADR 0001](../../decisions/0001-m1-wire-and-threat-boundary.md) and [Phase 1 evidence](../../evidence/m1/phase-1.md)
+
 **Architecture:** `api/relay/v1/relay.proto`가 유일한 wire source of truth다. checksum으로 고정한 workspace-local Buf와 Go 도구가 generated Go/C#을 만들고, `internal/protocol`이 신뢰 경계에서 크기·방향·필드 규칙을 검사한다. 동일 버전의 Docker digest도 기록하지만 현재 Docker Desktop의 container-start 장애와 실행 중인 사용자 DB를 건드리지 않는다. Go와 독립 C# console self-check가 같은 checked-in vector를 양방향으로 해석해 Unity 통합 전에 계약 drift를 차단한다.
 
 **Tech Stack:** Go 1.26.5, Protocol Buffers 35.1, `google.golang.org/protobuf` v1.36.11, Buf 1.72.0, C#/.NET SDK 9.0.305, `Google.Protobuf` 3.35.1, GNU Make.
@@ -472,11 +474,11 @@ git commit -m "feat(protocol): add canonical authentication transcripts"
 - Produces one command, `make protocol-check`, that regenerates, checks breaking changes and runs both language fixtures.
 - Produces durable D-01/D-02 acceptance and verification evidence.
 
-- [ ] **Step 1: Write the failing Go wire fixture test**
+- [x] **Step 1: Write the failing Go wire fixture test**
 
-Parse `client_data_envelope_hex` and `server_data_envelope_hex` into generated envelopes and assert every field. Construct the same messages, deterministic-marshal them, and assert byte equality with the fixture. This must fail first if fixture support is absent or inconsistent.
+Parse `client_data_envelope_hex` and `server_data_envelope_hex` into generated envelopes and assert every field. Construct the same messages, deterministic-marshal them, and assert byte equality with the fixture. The focused test passed immediately because prior tasks already supplied compatible generated bindings and fixture bytes; evidence records this as pre-existing behavior rather than a fabricated RED.
 
-- [ ] **Step 2: Add the independent C# self-check**
+- [x] **Step 2: Add the independent C# self-check**
 
 The project targets `net9.0`, enables package locking and references exactly `Google.Protobuf` `3.35.1`. Link the checked-in generated `Relay.cs`; do not copy or regenerate another binding. `Program.cs` accepts the fixture path as its only argument and:
 
@@ -487,7 +489,7 @@ The project targets `net9.0`, enables package locking and references exactly `Go
 
 Run once without locked mode to create `packages.lock.json`, then all subsequent checks use `dotnet restore --locked-mode`.
 
-- [ ] **Step 3: Finish the one-command contract check**
+- [x] **Step 3: Finish the one-command contract check**
 
 Append this target shape to `Makefile`:
 
@@ -504,7 +506,7 @@ protocol-check: proto-lint proto-breaking proto-generate
 	$(MAKE) csharp-compat
 ```
 
-- [ ] **Step 4: Run the complete Phase 1 verification**
+- [x] **Step 4: Run the complete Phase 1 verification**
 
 Run fresh:
 
@@ -517,7 +519,9 @@ git diff --check
 
 Expected: all commands exit `0`, C# prints `protocol compatibility OK`, generation has no diff, and fuzz reports no failure.
 
-- [ ] **Step 5: Record the closed decisions with observed evidence**
+Observed on clean candidate `33397a1`: all commands exited `0`; C# printed exactly `protocol compatibility OK`; generation and status remained clean; the 10-second fuzz target completed 718954 executions with 266 interesting inputs in 11.728 seconds.
+
+- [x] **Step 5: Record the closed decisions with observed evidence**
 
 `docs/decisions/0001-m1-wire-and-threat-boundary.md` records:
 
@@ -528,16 +532,26 @@ Expected: all commands exit `0`, C# prints `protocol compatibility OK`, generati
 
 `docs/evidence/m1/phase-1.md` records the commit, tool versions, commands, exit codes, test names, actual worst-case ClientData/ServerData byte lengths, C# output and fuzz duration. It contains no secrets or payload contents beyond the public golden fixture.
 
-- [ ] **Step 6: Update authoritative status only after Step 4 is green**
+- [x] **Step 6: Update authoritative status only after Step 4 is green**
 
 Mark PROT-01 and PROT-02 complete in PRD, TRD and REQUIREMENTS traceability. Mark Phase 1 success criteria and roadmap checkbox complete, set its plan count to `1/1`, and move STATE current focus to Phase 2. Link the decision and evidence documents from the Phase 1 roadmap section.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit the clean candidate**
 
 ```bash
-git add Makefile internal/protocol/fixture_test.go test/compat/csharp docs/decisions/0001-m1-wire-and-threat-boundary.md docs/evidence/m1/phase-1.md docs/PRD.md docs/TRD.md .planning/REQUIREMENTS.md .planning/ROADMAP.md .planning/STATE.md
+git add Makefile \
+  docs/decisions/0001-m1-wire-and-threat-boundary.md \
+  docs/evidence/m1/phase-1.md \
+  internal/protocol/fixture_test.go \
+  test/compat/csharp/Program.cs \
+  test/compat/csharp/Relay.Protocol.Compat.csproj \
+  test/compat/csharp/packages.lock.json
+git diff --cached --name-only
+git diff --cached --check
 git commit -m "test(protocol): verify Go and C# wire compatibility"
 ```
+
+Candidate implementation commit: `33397a1ee0106739dcc0bfe2da5fa8e0fb74e4c6`. The staged-name check printed exactly the seven paths above and the staged diff check exited `0`. After that clean candidate passed the complete gate, Step 5/6 acceptance changes were finalized for a separate documentation commit so the evidence can name the tested candidate without a self-referential SHA.
 
 ---
 
@@ -545,10 +559,10 @@ git commit -m "test(protocol): verify Go and C# wire compatibility"
 
 Do not advance to Phase 2 until all of the following are evidenced from the current commit:
 
-- `make protocol-check` exits `0` after regeneration with no generated diff.
-- `make go-test` exits `0`.
-- The bounded decoder fuzz target completes for 10 seconds without failure.
-- Go and C# both parse and emit the exact checked-in wire fixtures and HMAC/KDF values.
-- The worst-case 64-byte IDs, max sequence and 900-byte payload stay within 1200 bytes in both ClientData and ServerData forms.
-- D-01 and D-02 are recorded as accepted with exact limits and exclusions.
-- PROT-01/PROT-02 status is updated only after the evidence exists.
+- [x] `make protocol-check` exits `0` after regeneration with no generated diff.
+- [x] `make go-test` exits `0`.
+- [x] The bounded decoder fuzz target completes for 10 seconds without failure.
+- [x] Go and C# both parse and emit the exact checked-in wire fixtures and HMAC/KDF values.
+- [x] The worst-case 64-byte IDs, max sequence and 900-byte payload stay within 1200 bytes in both ClientData and ServerData forms.
+- [x] D-01 and D-02 are recorded as accepted with exact limits and exclusions.
+- [x] PROT-01/PROT-02 status is updated only after the evidence exists.

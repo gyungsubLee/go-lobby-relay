@@ -4,11 +4,11 @@
 |---|---|
 | 버전 | 4.0 |
 | 작성일 | 2026-08-08 |
-| 상태 | **Approved scope / implementation not started** |
+| 상태 | **Approved scope / Phase 1 implemented and verified** |
 | 주 독자 | 제품 책임자, Unity/Go 엔지니어, 초기 운영 담당자 |
 | 제품 범위 | v1, 정확히 2개 제품 마일스톤과 7개 구현 Phase |
 
-> 이 문서의 `Approved`는 구현할 범위가 승인되었다는 뜻이다. 소스, 자동 검사, Unity 검증, 배포 artifact 또는 성능 결과가 완료되었다는 뜻이 아니다.
+> 이 문서의 `Approved`는 구현할 범위가 승인되었다는 뜻이다. Phase 1의 wire contract와 호환성 검사는 완료됐지만, 이후 서버 runtime, Unity 검증, 배포 artifact와 성능 결과는 각 requirement와 roadmap 상태가 별도로 완료됐을 때만 주장한다.
 
 세부 wire format, HTTP/UDP 인터페이스, 상태 모델, 동시성, 설정, 빌드 및 컨테이너 설계는 [TRD.md](./TRD.md)를 따른다. 이 PRD는 사용자 결과, 범위, 요구사항과 출시 판정 기준을 정의한다.
 
@@ -134,12 +134,12 @@ v1의 committed product milestone은 정확히 다음 둘이다. Phase는 구현
 
 ## 6. 승인된 v1 요구사항 29개
 
-아래 29개 요구사항은 모두 **Approved / Not started**다. 문장은 제품 관점으로 그룹화했으며 ID와 의미는 `REQUIREMENTS.md`를 유지한다.
+아래 29개 요구사항은 모두 승인된 범위다. Phase 1의 PROT-01/PROT-02만 구현·검증 완료됐고 나머지 27개는 미완료다. 문장은 제품 관점으로 그룹화했으며 ID와 의미는 `REQUIREMENTS.md`를 유지한다.
 
 ### 6.1 M1 — 계약 호환성 `[기능·품질, 2개]`
 
-- [ ] **PROT-01**: Go 서버와 Unity 클라이언트는 버전, 패킷 종류, 세션, 순서 번호, 인증 태그와 opaque payload를 표현하는 하나의 bounded Protobuf wire contract를 공유한다.
-- [ ] **PROT-02**: 개발자는 고정된 도구 버전과 한 명령으로 같은 `.proto`에서 Go·C# 코드를 재생성하고 breaking-change 및 양방향 fixture 검사를 실행할 수 있다.
+- [x] **PROT-01**: Go 서버와 Unity 클라이언트는 버전, 패킷 종류, 세션, 순서 번호, 인증 태그와 opaque payload를 표현하는 하나의 bounded Protobuf wire contract를 공유한다.
+- [x] **PROT-02**: 개발자는 고정된 도구 버전과 한 명령으로 같은 `.proto`에서 Go·C# 코드를 재생성하고 breaking-change 및 양방향 fixture 검사를 실행할 수 있다.
 
 ### 6.2 M1 — 룸·grant 수명주기 `[기능·보안, 4개]`
 
@@ -214,11 +214,11 @@ Phase 매핑은 요구사항 전체를 최종 판정하는 **acceptance owner**�
 
 ## 7. Phase 1~7 로드맵
 
-실행 순서는 `Phase 1 → 2 → 3 → 4 → M1 gate → Phase 5 → 6 → 7 → M2 gate`다. 현재 모든 Phase 상태는 **Not started**다.
+실행 순서는 `Phase 1 → 2 → 3 → 4 → M1 gate → Phase 5 → 6 → 7 → M2 gate`다. Phase 1은 [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)과 [검증 증거](./evidence/m1/phase-1.md)로 완료됐고 Phase 2~7은 미완료다.
 
 | Phase | 공식 명칭 | 목표 | 의존성 | 완료 증거 |
 |---|---|---|---|---|
-| 1 | Wire Contract and Threat Boundary | Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성·threat boundary를 고정한다. | 없음 | pinned generation, Go/C# 양방향 fixture, breaking check, threat/limit 판정표 |
+| 1 | Wire Contract and Threat Boundary | Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성·threat boundary를 고정한다. | 없음 | **Complete:** [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md), [Phase 1 evidence](./evidence/m1/phase-1.md) |
 | 2 | In-Memory Room and Session Kernel | 인증된 room API와 grant·expiry 수명주기를 control-plane hard limit과 함께 단일 프로세스 메모리에서 완성한다. | Phase 1 | 멱등 create/get/end, secret redaction, grant isolation, bounded control input, room/grant expiry 검사 |
 | 3 | Authenticated UDP Relay | endpoint 인증, endpoint 포함 cleanup, replay 방지, same-room fan-out과 모든 admission limit을 갖춘 UDP Relay를 완성한다. | Phase 2 | bind/rebind, endpoint cleanup, cross-room negative cases, bounded fan-out, abuse·race·fuzz 검사 |
 | 4 | Unity Native Integration | Unity 네이티브 클라이언트가 입장, 교환, 중단과 네트워크 변경 복구를 증명한다. | Phase 3 | 두 client exchange, pause/resume·expiry·rebind, 선언된 native build/network matrix, 단일 Go process |
@@ -305,8 +305,8 @@ M2는 Phase 5~7의 success criteria가 모두 충족되고 다음 운영 결과�
 
 | 결정 | 승인할 내용 | 소유자 | 결정 시점 |
 |---|---|---|---|
-| D-01 | v1의 off-path ingress spoof/replay 방지 경계와 payload 기밀성·완전한 on-path 보호 제외를 명시적으로 수용할지 여부, authenticated transcript와 replay semantics | 제품 책임자(위협 수용), Go 보안 책임자(설계 검토) | **Phase 1 종료 전에 승인할 결정**. 수용하지 않으면 v1 구현을 멈추고 별도 scope/version으로 재승인 |
-| D-02 | 전체 envelope를 포함한 `MAX_DATAGRAM_BYTES`와 지원 version 처리 | Go protocol 책임자(측정안), Unity 책임자(대상 network 검증), 제품 책임자(승인) | **Phase 1 종료 전에 승인할 결정** |
+| D-01 | **Accepted:** off-path ingress spoof/replay 방지와 exact-source-only downstream 경계를 수용한다. payload confidentiality, 완전한 on-path/downstream cryptographic integrity와 traffic-analysis protection은 v1 범위 밖이며, binding별 replay는 64-bit sliding window로 고정한다. | 제품 책임자(위협 수용), Go 보안 책임자(설계 검토) | 2026-08-09 — [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) |
+| D-02 | **Accepted:** revision `1`, 전체 envelope 포함 datagram `1200`, payload `900`, ID `1..64` ASCII bytes, unsupported revision 거부. worst-case ClientData/ServerData는 `1103`/`1117` bytes다. | Go protocol 책임자(측정안), Unity 책임자(대상 network 검증), 제품 책임자(승인) | 2026-08-09 — [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) |
 | D-03 | room 수·정원·active session, grant TTL, metadata/body limit, expiry sweep와 cleanup deadline의 기본값·상한 | 제품 책임자(정책), Go 책임자(안전성) | **Phase 2 acceptance test 작성 전에 승인할 결정** |
 | D-04 | pre-auth source, session, room, global packet·byte·fan-out budget과 rate-limit 기본값 | Go 보안 책임자(남용 모델), 제품 책임자(정상 부하), 운영 책임자(host 한계) | **Phase 3 abuse test 작성 전에 승인할 결정** |
 | D-05 | 최소 PC target 1개와 Android/iOS 중 mobile target 1개를 포함한 정확한 Unity editor patch, 기기, Mono/IL2CPP 및 IPv4/IPv6/NAT64 검증 matrix | Unity 책임자(실행 가능성), 제품 책임자(지원 주장) | **Phase 4 시작 전에 승인할 결정** |
@@ -351,7 +351,7 @@ M2는 Phase 5~7의 success criteria가 모두 충족되고 다음 운영 결과�
 - 초기 수요는 single-host capacity로 검증 가능하며, capacity가 부족하다는 증거가 나오기 전에는 분산화하지 않는다.
 - 프로세스 재시작 시 모든 room/session/grant가 소멸하는 semantics를 제품과 운영이 수용한다.
 - 초기 지원 범주는 UDP를 사용할 수 있는 Unity native PC·mobile이다. 최소 PC target 1개와 Android/iOS 중 mobile target 1개를 검증하고, 추가 platform/runtime/network 조합은 실제 Phase 4 evidence가 있을 때만 지원한다고 주장한다.
-- 저장소의 구현은 시작되지 않았으며 로컬 도구 availability는 Phase 실행 전에 확인한다.
+- Phase 1의 Go, Protobuf, Buf와 .NET 도구는 고정된 버전으로 실제 실행·검증됐다. 이후 Unity native target, Linux/Docker deployment와 network 측정 도구는 해당 Phase의 선언된 환경에서 별도로 검증한다.
 
 가정이 깨지면 해당 Phase를 통과시키지 않고 제품 책임자가 범위·일정·출시 기준을 다시 승인한다.
 

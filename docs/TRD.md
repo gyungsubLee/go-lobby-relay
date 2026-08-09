@@ -3,11 +3,11 @@
 | 항목 | 값 |
 |---|---|
 | 작성일 | 2026-08-08 |
-| 상태 | **Planned contract / implementation not started** |
+| 상태 | **Phase 1 wire contract implemented / Phase 2–7 runtime contract planned** |
 | 대상 | Milestone 1–2, Phase 1–7 |
 | 관련 문서 | [PRD](./PRD.md), [PROJECT](../.planning/PROJECT.md), [REQUIREMENTS](../.planning/REQUIREMENTS.md), [ROADMAP](../.planning/ROADMAP.md) |
 
-> **구현 전 기술 계약:** 이 문서는 아직 존재하지 않는 구현의 목표 계약을 정의한다. 아래 HTTP endpoint, JSON schema, Protobuf message, 상태 전이와 수치는 모두 **planned**이며, 구현된 API를 기술하거나 현재 동작을 보증하지 않는다. Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
+> **구현 상태 경계:** Phase 1의 bounded Protobuf schema, generated Go/C#, codec, canonical HMAC transcript와 Go/C# compatibility gate는 구현·검증됐다. HTTP endpoint, room/session store, UDP runtime, Unity native, 운영·배포와 성능 계약은 아직 **planned**이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
 
 ## 1. 기술 목표, 비목표, 결정 요약
 
@@ -46,7 +46,7 @@
 
 ## 2. 최소 기술 스택과 의존성 budget
 
-모든 버전은 이 planned 계약의 기준선이다. 실제 도구 설치, Unity target build와 target-network 동작은 아직 검증되지 않았다.
+Phase 1의 Go 1.26.5, Buf 1.72.0, Protobuf Go/C# runtime과 .NET 9.0.305는 고정된 버전으로 실제 실행·검증됐다. Unity 6.3 native target build, Linux release target과 target-network 동작은 아직 검증되지 않았다.
 
 | 영역 | 기술 / 버전 | 용도 | 분류 |
 |---|---|---|---|
@@ -260,8 +260,8 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 | `capacity` | uint32 | immutable room capacity |
 | `relay_endpoint.host`, `.port` | string, uint16 | client가 address-family-neutral DNS resolve로 사용하는 advertised UDP destination; listen address와 다를 수 있음 |
 | `protocol_revision` | uint32 | v1은 `1` |
-| `max_datagram_bytes` | uint32 | envelope 포함 provisional total cap `1200` |
-| `max_payload_bytes` | uint32 | `ClientData.payload`와 relayed payload의 provisional cap `900`; 양쪽 envelope worst-case fixture로 검증 |
+| `max_datagram_bytes` | uint32 | envelope 포함 accepted total cap `1200` |
+| `max_payload_bytes` | uint32 | `ClientData.payload`와 relayed payload의 accepted cap `900`; 양쪽 envelope worst-case fixture로 검증 |
 | `grants[]` | array | participant별 allocation |
 | `grant_id` | base64url string | 16 random bytes, no padding |
 | `grant_secret` | base64url string | 32 random bytes, no padding; live grant의 PUT response에서만 노출 |
@@ -352,11 +352,11 @@ scratch container에는 `curl`을 추가하지 않는다. Docker/VM health check
 
 fixed input drop reason enum은 `malformed`, `oversized`, `unsupported_version`, `unknown_grant`, `auth_failed`, `replay`, `expired`, `revoked`, `wrong_room`, `wrong_endpoint`, `not_bound`, `rate_limited`, `fanout_limited`, `draining`이다.
 
-## 5. Planned UDP Protobuf wire contract
+## 5. Implemented UDP Protobuf wire contract
 
 ### 5.1 Namespace와 envelope
 
-| 항목 | planned 값 |
+| 항목 | contract 값 |
 |---|---|
 | syntax / application package | `proto3` / `relay.v1` |
 | Go namespace | generated path `gen/go/relay/v1`, package `relayv1` |
@@ -364,7 +364,7 @@ fixed input drop reason enum은 `malformed`, `oversized`, `unsupported_version`,
 | application revision | `1` |
 | framing | 한 UDP datagram = 한 `Envelope`; fragmentation/reassembly 없음 |
 
-아래는 planned field contract다. 실제 `.proto`와 generated code는 Phase 1에서 이 구조를 source of truth로 고정한다.
+`api/relay/v1/relay.proto`가 실제 wire source of truth이고, `gen/go/relay/v1/relay.pb.go`와 `unity/RelaySample/Assets/Relay/Generated/Relay.cs`는 고정된 Buf workflow로 생성해 함께 체크인한다. 아래 구조는 그 구현된 계약의 요약이며 수동 편집 대상이 아니다.
 
 ```proto
 message Envelope {
@@ -407,7 +407,7 @@ decoder는 unknown field, final body 없음, 잘못된 direction, 고정 길이 
 | `ServerData` | accepted sender sequence | empty | authoritative sender ID 1~64, payload 0~900 bytes |
 | `Ping` | `>=1` | exactly 32 bytes | binding 16 |
 
-### 5.2 Message 의미 (planned)
+### 5.2 Message contract
 
 | message | direction | auth | 의미 |
 |---|---|---|---|
@@ -440,7 +440,7 @@ client는 64-byte room/session ID를 포함한 worst-case CHALLENGE보다 크게
 
 handshake retry는 gameplay retry 비목표와 별개다. client는 한 attempt에서 같은 client nonce의 동일 HELLO를 100/200/400 ms bounded backoff+jitter로 challenge expiry 전까지 재전송한다. server는 같은 grant/room/session/nonce/endpoint의 duplicate HELLO에 기존 candidate와 동일 CHALLENGE를 반환하고 새 state를 만들지 않는다. 다른 nonce는 기존 candidate가 만료된 뒤에만 새 attempt로 받으며 그 전에는 침묵한다. duplicate AUTH는 recent-completed record가 challenge TTL 안이고 같은 endpoint·candidate이며 그 record의 binding ID/generation이 여전히 current이고 room/grant/binding deadline이 future일 때만 state transition 없이 같은 BOUND를 재전송한다. record는 rebind, binding/grant/room expiry·revoke 또는 TTL에 제거된다. client는 BOUND timeout 뒤 fresh nonce로 전체 handshake를 다시 시작하며, session마다 pending candidate와 recent-completed record는 각각 최대 1개다.
 
-### 5.4 Canonical HMAC와 replay (planned)
+### 5.4 Implemented canonical HMAC와 accepted replay contract
 
 Protobuf serialization 자체는 서명하지 않는다. 모든 transcript는 다음 byte-exact 함수로 만든다.
 
@@ -462,7 +462,7 @@ frame(domain, fields...) =
 
 모든 output은 HMAC-SHA-256 32 bytes이며 비교는 `hmac.Equal`/constant-time이다. raw grant secret은 일반 datagram에 넣지 않는다. `ServerData`의 `auth_tag`는 empty다. client는 HMAC-valid BOUND를 실제로 보낸 exact server `AddrPort`를 binding 수명 동안 pin하고 그 source의 `ServerData`만 받는다. 이는 spoof 가능한 network source check이며 downstream cryptographic integrity나 confidentiality를 뜻하지 않는다.
 
-Phase 1 fixture는 각 transcript 중간 hex, binding key와 tag expected hex를 고정한 Go/C# known-answer vector를 포함한다. replay state는 binding별 highest sequence와 64-bit sliding bitmap이다. duplicate와 window보다 오래된 packet은 `replay`로 drop하고, window 안 unseen out-of-order packet은 한 번 수락한다. 이는 security anti-replay일 뿐 gameplay delivery/deduplication 보장이 아니다. network·client 재전송·새 binding 경계의 중복/순서 변경은 여전히 가능하다.
+체크인된 Phase 1 fixture와 Go/C# self-check는 각 transcript 중간 hex, binding key와 tag expected hex를 byte-exact known-answer vector로 고정한다. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)이 replay state를 binding별 highest sequence와 64-bit sliding bitmap으로 확정했다. duplicate와 window보다 오래된 packet은 `replay`로 drop하고, window 안 unseen out-of-order packet은 한 번 수락한다. 이 runtime replay state는 Phase 3에서 구현한다. 이는 security anti-replay일 뿐 gameplay delivery/deduplication 보장이 아니며 network·client 재전송·새 binding 경계의 중복/순서 변경은 여전히 가능하다.
 
 ### 5.5 Endpoint bind/rebind와 payload (planned)
 
@@ -476,9 +476,9 @@ Phase 1 fixture는 각 transcript 중간 hex, binding key와 tag expected hex를
 - ingress invalidation은 final admission linearization 기준이다. DELETE/rebind보다 먼저 admission된 packet의 bounded fan-out writes는 끝날 수 있지만, 그 뒤 old source에서 final admission되는 packet은 모두 거부된다. v1은 in-flight barrier를 만들지 않는다.
 - delivery, order, retry, ACK와 reliable channel은 제공하지 않는다.
 
-### 5.6 Datagram cap과 copy model (planned)
+### 5.6 Accepted datagram cap과 planned copy model
 
-**`1200 bytes`는 Protobuf envelope, tag와 payload를 모두 포함한 provisional total UDP datagram cap이고 `900 bytes`는 payload cap이다.** 64-byte room/session/sender ID와 최대 varint를 사용한 ClientData/ServerData worst-case fixture가 둘 다 1200 이하임을 Phase 1에서 고정한다. target-network IPv4, IPv6/NAT64, Wi-Fi, carrier와 VPN 검증에서 fragmentation이 관찰되면 protocol revision과 두 cap을 함께 낮춘다. server는 `cap + 1` receive buffer로 truncation/oversize를 검출하며 v1은 분할하지 않는다.
+**`1200 bytes`는 Protobuf envelope, tag와 payload를 모두 포함한 accepted total UDP datagram cap이고 `900 bytes`는 payload cap이다.** 64-byte room/session/sender ID, 최대 sequence와 900-byte payload fixture에서 ClientData는 `1103`, ServerData는 `1117` bytes로 측정돼 둘 다 cap 안에 있다. [Phase 1 evidence](./evidence/m1/phase-1.md)가 이 결과를 고정한다. target-network IPv4, IPv6/NAT64, Wi-Fi, carrier와 VPN 검증에서 fragmentation이 관찰되면 새 protocol revision과 갱신된 결정으로 두 cap을 함께 낮춘다. server는 `cap + 1` receive buffer로 truncation/oversize를 검출하며 v1은 분할하지 않는다.
 
 이 설계는 **zero-copy를 보장하지 않는다.** 한 datagram을 bounded parse 1회하고, authoritative `ServerData`를 output marshal 1회하며, 생성된 동일 output byte slice를 모든 recipient write에 재사용하는 **최소 복사 설계**다. Protobuf runtime·kernel 내부 copy/allocation은 발생할 수 있다.
 
@@ -523,7 +523,7 @@ fan-out cost는 recipient 수와 `output_bytes * recipient_count`로 미리 계�
 
 ## 7. Security threat boundary
 
-| 위협 | v1 planned 대응 | 경계 |
+| 위협 | v1 대응 계약 | 경계 |
 |---|---|---|
 | off-path client spoof/injection | 256-bit grant secret, one-use challenge, exact endpoint, HMAC, random binding ID | authenticated client ingress 보호 |
 | replay | one-use AUTH + binding별 sequence window | gameplay reliability 보장은 아님 |
@@ -533,7 +533,7 @@ fan-out cost는 recipient 수와 `output_bytes * recipient_count`로 미리 계�
 | secret leakage | grant/operator token/payload 미로깅, GET/status redaction | trusted operator response만 grant 전달 |
 | slow receiver | no retry/queue, lock 밖 best-effort write | UDP loss 수용 |
 
-현재 v1 범위는 payload confidentiality와 완전한 on-path/downstream integrity 또는 traffic-analysis protection을 제공하지 않는다. Phase 1 security owner와 제품 책임자는 이 경계를 명시적으로 수용해야 한다. 수용할 수 없으면 Phase 1을 통과시키지 않고 PRD scope/version을 다시 승인하며, 현재 v1 안에 DTLS/AEAD나 pluggable crypto abstraction을 즉석 추가하지 않는다.
+[ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)은 v1이 payload confidentiality, 완전한 on-path/downstream cryptographic integrity와 traffic-analysis protection을 제공하지 않는 경계를 명시적으로 수용했다. 이 경계를 바꾸려면 현재 v1에 DTLS/AEAD나 pluggable crypto abstraction을 즉석 추가하지 않고 PRD scope와 protocol revision을 다시 승인한다.
 
 one receive loop와 한 mutex는 accepted work의 state, allocation과 fan-out cost를 bound하지만 line-rate NIC/CPU fairness나 DDoS 흡수를 보장하지 않는다. public host의 firewall/qdisc/provider filtering은 runbook 경계이며, saturation evidence가 single-host capacity를 넘으면 v1을 분산화하지 않고 admission target 또는 제품 범위를 재승인한다.
 
@@ -594,7 +594,7 @@ startup은 HTTP와 UDP bind가 모두 성공한 뒤에만 owned goroutine을 시
 | UDP integration | packet kind별 direction/tag/length/sequence/unknown-field negative matrix, HELLO<->CHALLENGE size, handshake loss/duplicate/reorder, same-room fan-out, wrong room/session/source, source-table saturation/expiry, send-buffer deadline, DELETE/rebind in-flight semantics |
 | fuzz | bounded Protobuf decoder, canonical transcript/state transition, arbitrary/max+1 datagram; panic·unbounded allocation 없음 |
 | race | store + HTTP + real UDP churn, expiry, DELETE/rebind와 in-flight fan-out을 `go test -race`로 검증 |
-| Go <-> C# golden fixture | 같은 `.proto`의 양방향 encode/decode, 1200/900-byte worst-case fixture, HMAC/KDF known-answer vector와 breaking check |
+| Go <-> C# golden fixture | **Phase 1 passed:** 같은 `.proto`의 양방향 encode/decode, 1200/900-byte worst-case fixture, HMAC/KDF known-answer vector와 breaking check. [Evidence](./evidence/m1/phase-1.md) |
 | Unity native | 승인된 PC target 1개 + Android/iOS 중 mobile target 1개의 Mono/IL2CPP build, 2-client exchange, cancellation, 20회 pause/resume, hostname, udp4/udp6 BOUND source pinning과 승인된 IPv4/IPv6/NAT64 matrix |
 | load + soak | checked-in independent Go client, named host/workload, 세 번 반복, tail latency/loss/resource report, source limiter와 write deadline saturation |
 | failure drill | invalid config/secret permission, port conflict, owned-loop/CSPRNG failure, kill/restart/token rotation, expired-grant storm, malformed/oversized flood, NIC/CPU saturation과 bounded recovery |
@@ -603,12 +603,12 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 
 ## 10. Requirement -> component -> Phase traceability
 
-아래는 승인된 v1 requirement **29/29**를 정확히 한 Phase에 매핑한다. 모든 구현 상태는 `Pending`이다.
+아래는 승인된 v1 requirement **29/29**를 정확히 한 Phase에 매핑한다. PROT-01/PROT-02 2개는 완료됐고 나머지 27개는 `Pending`이다.
 
 | Requirement | 책임 컴포넌트 / 검증 | Phase | Status |
 |---|---|---|---|
-| PROT-01 | protocol codec + shared proto | Phase 1 | Pending |
-| PROT-02 | Buf generation + Go/C# golden fixture | Phase 1 | Pending |
+| PROT-01 | protocol codec + shared proto | Phase 1 | Complete |
+| PROT-02 | Buf generation + Go/C# golden fixture | Phase 1 | Complete |
 | ROOM-01 | management HTTP + store | Phase 2 | Pending |
 | ROOM-02 | management HTTP auth/redaction + store | Phase 2 | Pending |
 | SESS-01 | store + `crypto/rand` issuance + room DELETE revocation | Phase 2 | Pending |
@@ -639,16 +639,16 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 
 **Coverage:** 29 total / 29 mapped / 0 unmapped.
 
-## 11. Open decisions with owner and deadline
+## 11. Decision registry with owner and deadline
 
 이는 빈 placeholder가 아니라, 해당 Phase가 증거를 만들고 계약을 개정해야 하는 명시적 decision gate다.
 
 | decision | 현재 planned baseline | 결정 Phase | owner |
 |---|---|---|---|
-| transport threat acceptance | off-path ingress spoof/replay 방지와 exact-source-only downstream baseline을 수용할지 문서화; 미수용 시 v1 중단·scope 재승인 | Phase 1 | Product + Protocol & Security owners |
-| wire caps | datagram 1200, payload 900, ID 64 bytes와 worst-case fixture를 승인하거나 protocol revision 전에 낮춤 | Phase 1 | Protocol & Network validation owner |
+| transport threat acceptance | **Accepted:** off-path ingress spoof/replay와 exact-source-only downstream baseline; confidentiality, 완전한 on-path/downstream integrity, traffic-analysis protection 제외; replay window 64-bit. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Product + Protocol & Security owners |
+| wire caps | **Accepted:** revision 1, datagram 1200, payload 900, ID 64 bytes; measured ClientData/ServerData 1103/1117 bytes. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Protocol & Network validation owner |
 | control/lifecycle policy | §8.1 planned defaults/caps를 boundary/churn evidence로 승인하거나 hard cap 아래로 조정 | Phase 2 | Room/Session kernel owner |
-| packet policy defaults | replay window provisional 64, source/session/room/global rates, fan-out budget | Phase 3 | UDP Relay owner |
+| packet policy defaults | replay window는 D-01에서 64-bit로 확정. source/session/room/global packet·byte rates와 fan-out budget은 여전히 Phase 3 D-04 open decision | Phase 3 | UDP Relay owner |
 | Unity support matrix | Unity 6.3 LTS baseline; exact editor patch/device/Mono/IL2CPP/IPv6 matrix 미주장 | Phase 4 | Unity integration owner |
 | health/drain timing | status transition, planned drain 250ms와 shutdown 5s를 승인하거나 더 낮은 bounded 값으로 조정 | Phase 5 | Operations + Lifecycle owners |
 | deployment profile | Linux host/GOARCH, Docker host-loopback publish와 원격 TLS proxy/SSH 방식, resource limits | Phase 6 | Product + Operations owners |

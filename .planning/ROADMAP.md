@@ -13,7 +13,7 @@
 
 ### Milestone 1 — Single-Binary Relay MVP
 
-- [ ] **Phase 1: Wire Contract and Threat Boundary** - Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성 기준을 고정한다.
+- [x] **Phase 1: Wire Contract and Threat Boundary** - Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성 기준을 고정한다.
 - [ ] **Phase 2: In-Memory Room and Session Kernel** - 인증된 room API와 grant·expiry·cleanup 수명주기를 단일 프로세스 메모리에서 완성한다.
 - [ ] **Phase 3: Authenticated UDP Relay** - endpoint 인증, replay 방지, same-room fan-out과 모든 admission limit을 갖춘 UDP Relay를 완성한다.
 - [ ] **Phase 4: Unity Native Integration** - 실제 Unity 네이티브 클라이언트가 입장, 교환, 중단과 네트워크 변경 복구를 증명한다.
@@ -34,10 +34,12 @@
 **Depends on:** Nothing (first phase)
 **Requirements:** PROT-01, PROT-02
 **Success Criteria** (what must be TRUE):
-  1. 개발자는 고정된 도구 버전과 한 명령으로 같은 `.proto`에서 Go·C# 소스를 재생성하고 동일한 결과를 얻는다.
-  2. Go와 C# fixture는 version, packet kind, session, sequence, auth tag와 opaque payload가 포함된 bounded envelope를 양방향으로 byte-compatible하게 교환한다.
-  3. 구현자는 checked-in threat boundary와 limit matrix에서 v1 attacker scope, authenticated transcript, replay·sequence semantics, provisional total datagram 상한과 unsupported revision 처리 규칙을 한 가지 방식으로 판정한다.
-**Plans:** TBD
+  1. [x] 개발자는 고정된 도구 버전과 한 명령으로 같은 `.proto`에서 Go·C# 소스를 재생성하고 동일한 결과를 얻는다.
+  2. [x] Go와 C# fixture는 version, packet kind, session, sequence, auth tag와 opaque payload가 포함된 bounded envelope를 양방향으로 byte-compatible하게 교환한다.
+  3. [x] 구현자는 checked-in threat boundary와 limit matrix에서 v1 attacker scope, authenticated transcript, replay·sequence semantics, accepted total datagram 상한과 unsupported revision 처리 규칙을 한 가지 방식으로 판정한다.
+**Plans:** 1/1 complete — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-1-wire-contract.md)
+**Decision:** [ADR 0001 — M1 wire and threat boundary](../docs/decisions/0001-m1-wire-and-threat-boundary.md)
+**Evidence:** [Phase 1 verification](../docs/evidence/m1/phase-1.md)
 
 ### Phase 2: In-Memory Room and Session Kernel
 **Goal:** 인증된 관리 호출자가 인메모리 room과 참가 grant의 전체 수명주기를 안전하고 retry-safe하게 제어할 수 있다.
@@ -49,7 +51,7 @@
   2. 인증된 호출자는 secret이 제거된 room 상태를 조회하고 room을 반복 종료할 수 있으며, 인증되지 않은 호출자는 room을 열거·조회·변경하지 못한다.
   3. 각 참가자는 다른 room·session에서 쓸 수 없는 최소 128-bit CSPRNG 엔트로피의 독립적인 만료·폐기 가능 grant를 받는다.
   4. HTTP body, metadata, room·session 수와 TTL의 control-plane hard limit을 mutation 전에 적용하고, room/grant expiry와 cleanup을 deterministic clock test로 증명한다. 전체 endpoint cleanup 요구사항 ROOM-03은 Phase 3에서 닫는다.
-**Plans:** TBD
+**Plans:** 0/1 complete — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-2-in-memory-room-session.md)
 
 ### Phase 3: Authenticated UDP Relay
 **Goal:** 인증된 bound 참가자만 제한된 자원을 사용해 같은 room으로 opaque UDP payload를 중계할 수 있다.
@@ -145,8 +147,8 @@ Milestone 2는 Phase 5-7의 success criteria가 모두 충족되고 다음 운�
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Wire Contract and Threat Boundary | Milestone 1 | 0/TBD | Not started | - |
-| 2. In-Memory Room and Session Kernel | Milestone 1 | 0/TBD | Not started | - |
+| 1. Wire Contract and Threat Boundary | Milestone 1 | 1/1 | Complete | 2026-08-09 |
+| 2. In-Memory Room and Session Kernel | Milestone 1 | 0/1 | Not started | - |
 | 3. Authenticated UDP Relay | Milestone 1 | 0/TBD | Not started | - |
 | 4. Unity Native Integration | Milestone 1 | 0/TBD | Not started | - |
 | 5. Single-Host Runtime Operations | Milestone 2 | 0/TBD | Not started | - |

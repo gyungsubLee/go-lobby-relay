@@ -1,6 +1,7 @@
 # Requirements: Go Lightweight Game Relay & Session Server
 
 **Defined:** 2026-08-08
+**Last updated:** 2026-08-09 — Phase 1 verified
 
 **Core Value:** 인증된 룸 참가자 사이의 게임 패킷을 낮은 지연과 작은 서버 자원으로 안정적으로 중계한다.
 
@@ -10,8 +11,8 @@
 
 #### Protocol Contract
 
-- [ ] **PROT-01**: Go 서버와 Unity 클라이언트는 버전, 패킷 종류, 세션, 순서 번호, 인증 태그와 opaque payload를 표현하는 하나의 bounded Protobuf wire contract를 공유한다.
-- [ ] **PROT-02**: 개발자는 고정된 도구 버전과 한 명령으로 같은 `.proto`에서 Go·C# 코드를 재생성하고 breaking-change 및 양방향 fixture 검사를 실행할 수 있다.
+- [x] **PROT-01**: Go 서버와 Unity 클라이언트는 버전, 패킷 종류, 세션, 순서 번호, 인증 태그와 opaque payload를 표현하는 하나의 bounded Protobuf wire contract를 공유한다.
+- [x] **PROT-02**: 개발자는 고정된 도구 버전과 한 명령으로 같은 `.proto`에서 Go·C# 코드를 재생성하고 breaking-change 및 양방향 fixture 검사를 실행할 수 있다.
 
 #### Room Control
 
@@ -124,8 +125,8 @@
 
 | Requirement | Milestone | Phase | Status |
 |-------------|-----------|-------|--------|
-| PROT-01 | Milestone 1 | Phase 1 | Pending |
-| PROT-02 | Milestone 1 | Phase 1 | Pending |
+| PROT-01 | Milestone 1 | Phase 1 | Complete |
+| PROT-02 | Milestone 1 | Phase 1 | Complete |
 | ROOM-01 | Milestone 1 | Phase 2 | Pending |
 | ROOM-02 | Milestone 1 | Phase 2 | Pending |
 | SESS-01 | Milestone 1 | Phase 2 | Pending |
@@ -158,7 +159,9 @@
 - v1 requirements: 29 total
 - Mapped to phases: 29 ✓
 - Unmapped: 0 ✓
+- Complete: 2
+- Pending: 27
 
 ---
 *Requirements defined: 2026-08-08*
-*Last updated: 2026-08-08 after initial research and scope lock*
+*Last updated: 2026-08-09 after Phase 1 verification*
