@@ -10,7 +10,7 @@
 
 **Foundation only:** This phase exercises HTTP/control limits and room/grant cleanup, but must not mark SAFE-01 or ROOM-03 complete; their UDP/binding portions belong to Phase 3.
 
-**Status:** In progress — Task 1/5 complete; D-03 accepted in `f68b6ed`, shared ID validation completed in `1e7b2c8`.
+**Status:** In progress — Tasks 1–2/5 complete; allocation kernel completed in `1a2ba3c`.
 
 **Commit discipline:** Before every commit below, stage only that task's owned paths, inspect `git diff --cached --name-only`, and require `git diff --cached --check` to exit 0. Never use `git add .` in the shared worktree.
 
@@ -288,7 +288,7 @@ Observed: `make go-test` first failed with `undefined: ValidID`, then the full t
 - Create: `internal/store/store_test.go`
 - Create: `internal/store/store.go`
 
-- [ ] **Step 1: Write allocation and idempotency tests**
+- [x] **Step 1: Write allocation and idempotency tests**
 
 Cover:
 
@@ -302,13 +302,13 @@ Cover:
 
 Also assert an identical retry after one grant expires while another keeps the room open returns `created=false`, preserves every grant ID and expiry, performs no random read, does not reissue or extend the terminal grant, and omits only that terminal grant's secret. Task 4 separately proves the corresponding HTTP status is `200`.
 
-- [ ] **Step 2: Write mutation-before-limit tests**
+- [x] **Step 2: Write mutation-before-limit tests**
 
 Test equality and one-over boundaries for open rooms, every resident room record, capacity, active sessions, room TTL, grant TTL, sweep interval, empty grace, tombstone TTL, participant count, and identifier length. Test the exact nine `DefaultLimits` values; every exact hard maximum; every zero, negative, and max+1/max+1ns constructor value; and impossible cross-field relationships. For creation TTLs cover `now`, `now+1ns`, exact maximum, maximum+1ns, and grant expiry exactly equal to the room deadline. Invalid/capacity/config requests must not call the random reader or change counters/maps.
 
-At full room/session/record caps, an identical retry still succeeds without randomness, a different definition returns `ErrConflict`, and a new room ID returns `ErrCapacity` without randomness or mutation. Known DELETE converts its resident record in place; unknown DELETE creates no record.
+At full room/session/record caps, an identical retry still succeeds without randomness, a different definition returns `ErrConflict`, and a new room ID returns `ErrCapacity` without randomness or mutation. Task 3 covers known/unknown DELETE accounting.
 
-- [ ] **Step 3: Write random failure/collision tests**
+- [x] **Step 3: Write random failure/collision tests**
 
 Use small deterministic `io.Reader` fixtures, not a mock framework:
 
@@ -318,7 +318,7 @@ Use small deterministic `io.Reader` fixtures, not a mock framework:
 - nine consecutive colliding draws exhaust the budget and return `ErrFatalRandom`;
 - short read/error at any ID or secret leaves no room, index, or counter mutation.
 
-- [ ] **Step 4: Run RED**
+- [x] **Step 4: Run RED**
 
 ```bash
 GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go test ./internal/store -count=1
@@ -326,9 +326,9 @@ GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go 
 
 Expected: package/API missing.
 
-- [ ] **Step 5: Implement one concrete store**
+- [x] **Step 5: Implement one concrete store**
 
-Use one `sync.RWMutex` for room records, grant index, and counters. Validate/canonicalize syntax before locking and recheck mutable capacity under the exclusive lock. Sort a copied participant definition by `(participant_id, session_id)`. Sample one atomic `ClockReading` per operation, derive `ttl = externalExpiry - reading.Wall`, then store `monoDeadline = reading.Mono + ttl`; retain normalized UTC instants only for response/idempotency. Every authority decision uses only `reading.Mono`, so a later wall-clock step cannot extend a grant.
+Use one `sync.RWMutex` for room records, grant index, and counters. Validate/canonicalize syntax before locking and recheck mutable capacity under the exclusive lock. Sort a copied participant definition by `(participant_id, session_id)`. Sample one atomic `ClockReading` only after acquiring that lock so lock wait cannot stale the authority decision; derive `ttl = externalExpiry - reading.Wall`, then store `monoDeadline = reading.Mono + ttl`. Retain normalized UTC instants only for response/idempotency. Every authority decision uses only `reading.Mono`, so a later wall-clock step cannot extend a grant.
 
 The default clock captures one `origin := time.Now()` when the store is created. Each reading performs exactly one `current := time.Now()` and returns `ClockReading{Wall: current.UTC(), Mono: current.Sub(origin)}`; `Sub` uses Go's monotonic components. `Expire` samples this store-owned clock internally, so callers cannot mix monotonic epochs.
 
@@ -336,7 +336,7 @@ For `CreateRoom`, normalize the immutable definition without applying creation-t
 
 Generate a complete temporary allocation with `io.ReadFull`, check staged and existing IDs, then commit all maps/counters once. A random read failure or collision exhaustion returns `ErrFatalRandom`, distinguishable from ordinary validation/capacity errors. Holding the global lock during CSPRNG reads is the deliberate Phase 2 ponytail ceiling; do not add reservations or a second phase.
 
-- [ ] **Step 6: Run GREEN, race, and commit**
+- [x] **Step 6: Run GREEN, race, and commit**
 
 ```bash
 GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go test ./internal/store -count=1 -v
@@ -352,6 +352,8 @@ git add internal/store/store.go internal/store/store_test.go
 git diff --cached --check
 git commit -m "feat(store): allocate idempotent in-memory rooms"
 ```
+
+Observed: the RED package/API compile failed as expected. Review then exposed a pre-lock stale clock sample; its regression test failed before the fix and passed after the clock read moved under the mutex. Focused tests, race, full Go tests, store vet, formatting, and diff checks passed. Commit: `1a2ba3c`.
 
 ---
 
