@@ -10,6 +10,8 @@
 
 **Foundation only:** This phase exercises HTTP/control limits and room/grant cleanup, but must not mark SAFE-01 or ROOM-03 complete; their UDP/binding portions belong to Phase 3.
 
+**Status:** In progress — Task 1/5 complete; D-03 accepted in `f68b6ed`, shared ID validation completed in `1e7b2c8`.
+
 **Commit discipline:** Before every commit below, stage only that task's owned paths, inspect `git diff --cached --name-only`, and require `git diff --cached --check` to exit 0. Never use `git add .` in the shared worktree.
 
 ---
@@ -24,7 +26,7 @@ Do not start Task 2 acceptance tests until both are true:
 | Contract | Value |
 |---|---:|
 | open rooms | 256 |
-| open + tombstone records | 4096 |
+| all resident room records | 4096; every non-absent open, empty-grace, terminal/pre-sweep, and tombstone record counts |
 | participants per room | 16 |
 | active sessions/live grants | 4096 |
 | room TTL | request required; maximum 2h |
@@ -41,10 +43,11 @@ Do not start Task 2 acceptance tests until both are true:
 Derived cleanup contract:
 
 - Authority ends at `now >= deadline`; sweep delay never extends it.
+- Logically terminal but pre-sweep rooms/grants retain admission counters until `Expire` or cleanup by an operation touching that state; this permits at most one configured-sweep interval of conservative admission lag without extending authority.
 - DELETE clears secret-bearing state and creates a tombstone immediately.
 - Room-TTL cleanup is completed within one sweep interval.
 - After the last live grant's logical terminal deadline, empty cleanup occurs after 5s grace and within one additional sweep (maximum 6s).
-- Tombstones retain only room ID and deadline and disappear within 61s of creation.
+- Tombstones retain only room ID and deadline, block same-ID creation only while `now < tombstoneDeadline`, and disappear within 61s of creation. At the exact deadline a same-ID creation may proceed before the physical sweep; DELETE and `Expire` never refresh that deadline.
 
 No other policy value is open in Phase 2.
 
@@ -86,6 +89,9 @@ const (
     HardMaxActiveSessions = 4096
     HardMaxRoomTTL        = 2 * time.Hour
     HardMaxGrantTTL       = 2 * time.Hour
+    HardMaxSweepInterval  = 1 * time.Second
+    HardMaxEmptyGrace     = 5 * time.Second
+    HardMaxTombstoneTTL   = 60 * time.Second
 )
 
 func DefaultLimits() Limits
@@ -226,15 +232,15 @@ Both constructors reject non-positive values, values above the compiled hard max
 - Modify: `internal/protocol/codec_test.go`
 - Modify: `internal/protocol/codec.go`
 
-- [ ] **Step 1: Stop for explicit D-03 acceptance**
+- [x] **Step 1: Stop for explicit D-03 acceptance**
 
 Present the exact table and derived cleanup bounds above. If any value changes, update PRD/TRD first and revise every later boundary fixture before implementation.
 
-- [ ] **Step 2: Record the accepted decision**
+- [x] **Step 2: Record the accepted decision**
 
 ADR 0002 records defaults and hard maxima, exact-deadline semantics, empty/tombstone cleanup bounds, the lack of arbitrary metadata, and the fact that later configuration may lower but not disable these limits. Update D-03 from open to accepted without marking Phase 2 requirements complete.
 
-- [ ] **Step 3: Write the shared-ID RED test**
+- [x] **Step 3: Write the shared-ID RED test**
 
 Add public boundary cases for 1 and 64 bytes, empty/65 bytes, invalid first punctuation, allowed later `._-`, slash, whitespace, and non-ASCII. Assert the codec still uses the same public function.
 
@@ -246,11 +252,11 @@ make go-test
 
 Expected: compile failure because `protocol.ValidID` does not exist.
 
-- [ ] **Step 4: Export the existing function only**
+- [x] **Step 4: Export the existing function only**
 
 Rename `validID` to `ValidID` and update its codec callers. Do not add a second implementation.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 make go-test
@@ -271,6 +277,8 @@ git commit -m "refactor(protocol): share bounded identifier validation"
 
 Keep the decision and code changes as two focused commits.
 
+Observed: `make go-test` first failed with `undefined: ValidID`, then the full test target and protocol package vet exited `0`. Decision commit: `f68b6ed`; protocol commit: `1e7b2c8`.
+
 ---
 
 ### Task 2: Build the bounded allocation kernel test-first
@@ -285,18 +293,20 @@ Keep the decision and code changes as two focused commits.
 Cover:
 
 - first canonical definition returns `created=true`, one room, and one independent grant per participant;
+- participants are non-empty, `capacity == len(participants)`, participant IDs and session IDs are independently unique within a room, and the same IDs remain valid in different rooms;
 - grant ID is exactly 16 random bytes and secret exactly 32 bytes;
 - participant JSON order and timestamp representations of the same instant are an identical retry;
 - identical retry returns the same live grant IDs/secrets and creates no new state;
 - capacity, room expiry, participant/session tuple, or grant expiry change returns `ErrConflict`;
-- participant and session IDs are individually unique within the room;
 - returned allocations and input slices are deep copies.
 
 Also assert an identical retry after one grant expires while another keeps the room open returns `created=false`, preserves every grant ID and expiry, performs no random read, does not reissue or extend the terminal grant, and omits only that terminal grant's secret. Task 4 separately proves the corresponding HTTP status is `200`.
 
 - [ ] **Step 2: Write mutation-before-limit tests**
 
-Test equality and one-over boundaries for open rooms, total room records, capacity, active sessions, room TTL, grant TTL, participant count, and identifier length. Test `DefaultLimits`, every zero/negative/above-hard-cap store constructor value, and impossible cross-field relationships. Invalid/capacity/config requests must not call the random reader or change counters/maps.
+Test equality and one-over boundaries for open rooms, every resident room record, capacity, active sessions, room TTL, grant TTL, sweep interval, empty grace, tombstone TTL, participant count, and identifier length. Test the exact nine `DefaultLimits` values; every exact hard maximum; every zero, negative, and max+1/max+1ns constructor value; and impossible cross-field relationships. For creation TTLs cover `now`, `now+1ns`, exact maximum, maximum+1ns, and grant expiry exactly equal to the room deadline. Invalid/capacity/config requests must not call the random reader or change counters/maps.
+
+At full room/session/record caps, an identical retry still succeeds without randomness, a different definition returns `ErrConflict`, and a new room ID returns `ErrCapacity` without randomness or mutation. Known DELETE converts its resident record in place; unknown DELETE creates no record.
 
 - [ ] **Step 3: Write random failure/collision tests**
 
@@ -364,7 +374,7 @@ Required semantics:
 - GET returns `ErrNotFound` from the logical terminal instant even before physical cleanup;
 - known DELETE immediately clears grants/secrets and converts the same room record to a tombstone;
 - unknown DELETE returns success but creates no record/tombstone;
-- terminal/tombstoned PUT returns `ErrConflict` even for the old definition.
+- terminal and live tombstone (`now < tombstoneDeadline`) PUT returns `ErrConflict` even for the old definition; at the exact tombstone deadline a new allocation is allowed before a physical sweep.
 - retrying a still-open room with one terminal grant preserves the terminal grant ID/expiry, omits its secret, consumes no randomness, and never refreshes it.
 
 - [ ] **Step 2: Write deterministic cleanup tests**
@@ -374,14 +384,18 @@ Cover:
 - room TTL to tombstone within one sweep;
 - last live grant's actual deadline + 5s empty grace before tombstone;
 - tombstone removal at 60s and within one 1s sweep;
-- `open+tombstone <= MaxRoomRecords`;
-- expiry removes grant reverse-index entries;
+- tombstone conflict at `deadline-1ns`, same-ID recreation at the exact deadline before sweep, and repeated DELETE/`Expire` never refreshing the deadline;
+- `len(roomsByID) <= MaxRoomRecords` across every open, empty-grace, terminal/pre-sweep, and tombstone resident record;
+- expired-but-unswept rooms/grants retain open-room/active-session accounting until `Expire`, then release counters exactly once without extending authority;
+- expiry removes grant reverse-index entries and secret-bearing material while retaining immutable grant ID/expiry/state for idempotent retry;
+- empty grace anchors to the final grant's actual monotonic deadline rather than discovery time; room TTL wins when earlier, including equal-deadline `>=` behavior;
+- lower positive sweep, empty-grace, and tombstone configurations actually control their respective cleanup behavior;
 - 1,000 create/expire/tombstone cycles return counts to baseline;
 - `RunSweeper` stops on context cancellation with no owned goroutine left.
 
 - [ ] **Step 3: Write concurrency tests**
 
-Race concurrent identical/different create, GET, DELETE, and `Expire`. Assert one first creation, stable retry data, conflict for a different definition, no resurrection, no negative counters, and no map/index mismatch.
+Race concurrent identical/different create, GET, DELETE, and `Expire`. Assert one first creation, stable retry data, conflict for a different definition, no resurrection, no negative counters, no stale secrets, no resident-record overflow, and no map/index mismatch. Recompute counters and reverse indexes from the room map after race and churn cases.
 
 - [ ] **Step 4: Run RED, implement, and run GREEN**
 
@@ -534,7 +548,7 @@ Do not start Phase 3 implementation until all are evidenced from the current bra
 - Each participant has an independent 16-byte random grant ID and 32-byte secret scoped in authoritative room/session state.
 - Random read failure or nine colliding ID draws produce the distinguishable fatal-random error with no partial state; HTTP returns a fixed 500 while process-fatal coordination remains deferred.
 - GET is structurally secret-free; DELETE is idempotent and immediately revokes known room grants.
-- All ID, TTL, room, record, capacity, session, body, header, finite rate, and concurrency values are positive and at or below compiled D-03 maxima and act before mutation/body work as specified.
+- All ID, TTL, sweep/grace/tombstone, room, resident-record, capacity, session, body, header, finite rate, and concurrency values are positive and at or below compiled D-03 maxima and act before mutation/body work as specified.
 - Exact deadline, backward-wall/monotonic behavior, strict UTC-Z timestamp parsing, sweep, empty grace, tombstone, partial-expiry retry, random failure/collision, header-size/slow-header, concurrency, and 1,000-cycle churn tests pass.
 - Full tests, store/control race tests, vet, and diff checks exit 0.
 - Only ROOM-01, ROOM-02, and SESS-01 are marked complete; ROOM-03 and SAFE-01 remain pending for Phase 3.
