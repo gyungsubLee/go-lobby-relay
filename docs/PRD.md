@@ -4,11 +4,11 @@
 |---|---|
 | 버전 | 4.0 |
 | 작성일 | 2026-08-08 |
-| 상태 | **Approved scope / Phase 1 implemented and verified** |
+| 상태 | **Approved scope / Phases 1–2 implemented and verified** |
 | 주 독자 | 제품 책임자, Unity/Go 엔지니어, 초기 운영 담당자 |
 | 제품 범위 | v1, 정확히 2개 제품 마일스톤과 7개 구현 Phase |
 
-> 이 문서의 `Approved`는 구현할 범위가 승인되었다는 뜻이다. Phase 1의 wire contract와 호환성 검사는 완료됐지만, 이후 서버 runtime, Unity 검증, 배포 artifact와 성능 결과는 각 requirement와 roadmap 상태가 별도로 완료됐을 때만 주장한다.
+> 이 문서의 `Approved`는 구현할 범위가 승인되었다는 뜻이다. Phase 1의 wire contract와 Phase 2의 인증된 room control·인메모리 수명주기는 구현·검증됐다. UDP runtime, Unity 검증, 배포 artifact와 성능 결과는 각 requirement와 roadmap 상태가 별도로 완료됐을 때만 주장한다.
 
 세부 wire format, HTTP/UDP 인터페이스, 상태 모델, 동시성, 설정, 빌드 및 컨테이너 설계는 [TRD.md](./TRD.md)를 따른다. 이 PRD는 사용자 결과, 범위, 요구사항과 출시 판정 기준을 정의한다.
 
@@ -134,7 +134,7 @@ v1의 committed product milestone은 정확히 다음 둘이다. Phase는 구현
 
 ## 6. 승인된 v1 요구사항 29개
 
-아래 29개 요구사항은 모두 승인된 범위다. Phase 1의 PROT-01/PROT-02만 구현·검증 완료됐고 나머지 27개는 미완료다. 문장은 제품 관점으로 그룹화했으며 ID와 의미는 `REQUIREMENTS.md`를 유지한다.
+아래 29개 요구사항은 모두 승인된 범위다. Phase 1의 PROT-01/PROT-02와 Phase 2의 ROOM-01/ROOM-02/SESS-01, 총 5개가 구현·검증 완료됐고 나머지 24개는 미완료다. 문장은 제품 관점으로 그룹화했으며 ID와 의미는 `REQUIREMENTS.md`를 유지한다.
 
 ### 6.1 M1 — 계약 호환성 `[기능·품질, 2개]`
 
@@ -143,10 +143,10 @@ v1의 committed product milestone은 정확히 다음 둘이다. Phase는 구현
 
 ### 6.2 M1 — 룸·grant 수명주기 `[기능·보안, 4개]`
 
-- [ ] **ROOM-01**: 인증된 관리 호출자는 caller-supplied room ID, 수용 인원, 참가자와 만료 시간을 사용해 룸을 멱등하게 생성하고 Relay endpoint와 참가자별 grant를 받을 수 있다.
-- [ ] **ROOM-02**: 인증된 관리 호출자는 룸의 비밀을 노출하지 않는 상태를 조회하고 룸을 멱등하게 종료할 수 있으며, 인증되지 않은 호출자는 룸을 열거하거나 변경할 수 없다.
+- [x] **ROOM-01**: 인증된 관리 호출자는 caller-supplied room ID, 수용 인원, 참가자와 만료 시간을 사용해 룸을 멱등하게 생성하고 Relay endpoint와 참가자별 grant를 받을 수 있다.
+- [x] **ROOM-02**: 인증된 관리 호출자는 룸의 비밀을 노출하지 않는 상태를 조회하고 룸을 멱등하게 종료할 수 있으며, 인증되지 않은 호출자는 룸을 열거하거나 변경할 수 없다.
 - [ ] **ROOM-03**: 서버는 종료·만료·마지막 세션 이탈 후 룸, grant, endpoint와 관련 자원을 정해진 시간 안에 제거한다.
-- [ ] **SESS-01**: 각 참가자는 최소 128-bit CSPRNG 엔트로피를 가진 룸·세션 범위의 만료 및 폐기 가능한 grant를 독립적으로 받는다.
+- [x] **SESS-01**: 각 참가자는 최소 128-bit CSPRNG 엔트로피를 가진 룸·세션 범위의 만료 및 폐기 가능한 grant를 독립적으로 받는다.
 
 ### 6.3 M1 — 인증된 Relay와 남용 방지 `[기능·보안·리소스, 9개]`
 
@@ -216,12 +216,12 @@ Phase 매핑은 요구사항 전체를 최종 판정하는 **acceptance owner**�
 
 ## 7. Phase 1~7 로드맵
 
-실행 순서는 `Phase 1 → 2 → 3 → 4 → M1 gate → Phase 5 → 6 → 7 → M2 gate`다. Phase 1은 [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)과 [검증 증거](./evidence/m1/phase-1.md)로 완료됐고 Phase 2~7은 미완료다.
+실행 순서는 `Phase 1 → 2 → 3 → 4 → M1 gate → Phase 5 → 6 → 7 → M2 gate`다. Phase 1은 [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)과 [검증 증거](./evidence/m1/phase-1.md)로, Phase 2는 [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)와 [검증 증거](./evidence/m1/phase-2.md)로 완료됐다. Phase 3~7은 미완료다.
 
 | Phase | 공식 명칭 | 목표 | 의존성 | 완료 증거 |
 |---|---|---|---|---|
 | 1 | Wire Contract and Threat Boundary | Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성·threat boundary를 고정한다. | 없음 | **Complete:** [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md), [Phase 1 evidence](./evidence/m1/phase-1.md) |
-| 2 | In-Memory Room and Session Kernel | 인증된 room API와 grant·expiry 수명주기를 control-plane hard limit과 함께 단일 프로세스 메모리에서 완성한다. | Phase 1 | 멱등 create/get/end, secret redaction, grant isolation, bounded control input, room/grant expiry 검사 |
+| 2 | In-Memory Room and Session Kernel | 인증된 room API와 grant·expiry 수명주기를 control-plane hard limit과 함께 단일 프로세스 메모리에서 완성한다. | Phase 1 | **Complete:** [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md), [Phase 2 evidence](./evidence/m1/phase-2.md) |
 | 3 | Authenticated UDP Relay | endpoint 인증, endpoint 포함 cleanup, replay 방지, same-room fan-out과 모든 admission limit을 갖춘 UDP Relay를 완성한다. | Phase 2 | bind/rebind, endpoint cleanup, cross-room negative cases, bounded fan-out, abuse·race·fuzz 검사 |
 | 4 | Unity Native Integration | Unity 네이티브 클라이언트가 입장, 교환, 중단과 네트워크 변경 복구를 증명한다. | Phase 3 | 두 client exchange, pause/resume·expiry·rebind, 선언된 native build/network matrix, 단일 Go process |
 | 5 | Single-Host Runtime Operations | 운영자가 한 프로세스의 설정, 상태, 로그와 bounded shutdown을 신뢰할 수 있게 한다. | M1 완료 | fail-fast config, truthful private status, redacted logs/counters, deadline shutdown |
@@ -310,7 +310,7 @@ M2는 Phase 5~7의 success criteria가 모두 충족되고 다음 운영 결과�
 | D-01 | **Accepted:** off-path ingress spoof/replay 방지와 exact-source-only downstream 경계를 수용한다. payload confidentiality, 완전한 on-path/downstream cryptographic integrity와 traffic-analysis protection은 v1 범위 밖이며, binding별 replay는 64-bit sliding window로 고정한다. | 제품 책임자(위협 수용), Go 보안 책임자(설계 검토) | 2026-08-09 — [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) |
 | D-02 | **Accepted:** revision `1`, 전체 envelope 포함 datagram `1200`, payload `900`, ID `1..64` ASCII bytes, unsupported revision 거부. worst-case ClientData/ServerData는 `1103`/`1117` bytes다. | Go protocol 책임자(측정안), Unity 책임자(대상 network 검증), 제품 책임자(승인) | 2026-08-09 — [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) |
 | D-03 | **Accepted:** control/lifecycle compiled default를 hard maximum으로 고정하고 `now >= deadline` 권한 종료, DELETE 즉시 secret 제거·tombstone, room/empty/tombstone cleanup 최대 `1s`/`6s`/`61s`를 수용한다. | 제품 책임자(정책), Go 책임자(안전성) | 2026-08-09 — [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md) |
-| D-04 | pre-auth source, session, room, global packet·byte·fan-out budget과 rate-limit 기본값 | Go 보안 책임자(남용 모델), 제품 책임자(정상 부하), 운영 책임자(host 한계) | **Phase 3 abuse test 작성 전에 승인할 결정** |
+| D-04 | pre-auth source, session, room, global packet·byte·fan-out budget과 rate-limit 기본값 | Go 보안 책임자(남용 모델), 제품 책임자(정상 부하), 운영 책임자(host 한계) | **후보 미승인; Phase 3 구현 전 owner 승인 필수** |
 | D-05 | 최소 PC target 1개와 Android/iOS 중 mobile target 1개를 포함한 정확한 Unity editor patch, 기기, Mono/IL2CPP 및 IPv4/IPv6/NAT64 검증 matrix | Unity 책임자(실행 가능성), 제품 책임자(지원 주장) | **Phase 4 시작 전에 승인할 결정** |
 | D-06 | health 전환과 process shutdown deadline | 초기 운영 책임자(운영 요구), Go 책임자(종료 검증) | **Phase 5 acceptance test 작성 전에 승인할 결정** |
 | D-07 | 기준 Linux/Docker host, loopback management와 host-side TLS proxy/SSH tunnel 중 원격 운영 방식, 배포 topology | 초기 운영 책임자(환경), 제품 책임자(출시 경계), Go 책임자(artifact) | **Phase 6 runbook 확정 전에 승인할 결정** |

@@ -10,7 +10,7 @@
 
 **Foundation only:** This phase exercises HTTP/control limits and room/grant cleanup, but must not mark SAFE-01 or ROOM-03 complete; their UDP/binding portions belong to Phase 3.
 
-**Status:** In progress — Tasks 1–3/5 complete; room/grant lifecycle completed in `dc57edb`.
+**Status:** Complete — Tasks 1–5/5 passed; tested source candidate `da02563124a605757b0f9ccbf66284d8fcc3b018`; [verification evidence](../../evidence/m1/phase-2.md). Phase 3 remains blocked pending D-04 owner approval.
 
 **Commit discipline:** Before every commit below, stage only that task's owned paths, inspect `git diff --cached --name-only`, and require `git diff --cached --check` to exit 0. Never use `git add .` in the shared worktree.
 
@@ -431,11 +431,11 @@ Observed: the RED tests failed to compile on the missing lifecycle API, then foc
 - Create: `internal/control/http_test.go`
 - Create: `internal/control/http.go`
 
-- [ ] **Step 1: Pin only the approved limiter dependency**
+- [x] **Step 1: Pin only the approved limiter dependency**
 
 Add exactly `golang.org/x/time v0.15.0`. Do not add a router, JWT, UUID, config, DI, logger, assertion, or mocking dependency.
 
-- [ ] **Step 2: Write Bearer and canonical-route RED tests**
+- [x] **Step 2: Write Bearer and canonical-route RED tests**
 
 For `PUT|GET|DELETE /v1/rooms/{room_id}`, cover:
 
@@ -447,7 +447,7 @@ For `PUT|GET|DELETE /v1/rooms/{room_id}`, cover:
 - unsupported method returns `405` and `Allow: PUT, GET, DELETE`;
 - GET/DELETE body returns `400`; DELETE success is bodyless `204`.
 
-- [ ] **Step 3: Write strict PUT and response tests**
+- [x] **Step 3: Write strict PUT and response tests**
 
 Test `application/json`, 64 KiB cap, unknown field, duplicate/trailing JSON value, missing fields, ID/capacity/TTL boundaries, and absence of arbitrary metadata. Decode timestamp fields explicitly as strings and require canonical RFC 3339 UTC with a `Z` suffix; reject numeric timestamps, offsets such as `+09:00`, missing zones, and otherwise parseable non-UTC forms. Test:
 
@@ -461,17 +461,17 @@ Test `application/json`, 64 KiB cap, unknown field, duplicate/trailing JSON valu
 - fixed bounded JSON error codes/messages;
 - endpoint, revision `1`, datagram `1200`, payload `900`, and base64url grant encoding.
 
-- [ ] **Step 4: Test admission before body consumption**
+- [x] **Step 4: Test admission before body consumption**
 
 Use `rate.Limiter.AllowN(config.Now(), 1)` with deterministic time and a nonblocking semaphore. A rejected rate or concurrency admission returns `429 rate_limited` before reading even one body byte. Do not add a queue.
 
 Constructor tests reject zero/negative/above-hard-cap request rate, `rate.Inf`, burst, and concurrency values before a handler is returned.
 
-- [ ] **Step 5: Test the real bounded server**
+- [x] **Step 5: Test the real bounded server**
 
 `NewServer` must set `MaxHeaderBytes=16<<10`, read-header 2s, read/write 5s, idle 30s. Loopback tests (a) send an oversized header and observe rejection without store mutation and (b) hold an incomplete header open and observe the server close it after the 2s read-header bound without invoking the handler/store. Close and join the server in every test.
 
-- [ ] **Step 6: Run RED, implement, and run GREEN**
+- [x] **Step 6: Run RED, implement, and run GREEN**
 
 Use `http.ServeMux` or one direct handler, `http.MaxBytesReader`, `json.Decoder.DisallowUnknownFields`, and an explicit second decode for EOF. Encode outside the store lock. Never log token, grant, IDs, or body.
 
@@ -484,7 +484,7 @@ GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" .tools/go/bin/go 
 git diff --check
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Stage only `go.mod`, `go.sum`, and `internal/control`; run `git diff --cached --check` before committing.
 
@@ -493,6 +493,8 @@ git add go.mod go.sum internal/control/http.go internal/control/http_test.go
 git diff --cached --check
 git commit -m "feat(control): expose bounded room management API"
 ```
+
+Observed: the initial focused test failed to compile on the missing control API. After implementation, focused control tests, store/control race tests, full Go tests, tidy, vet, formatting, and diff checks passed. Regressions also covered non-canonical token trailing bits, case-folded JSON keys, an all-zero configured token, and the server-wide `OPTIONS *` path. Independent review found no remaining finding. Commit: `da02563124a605757b0f9ccbf66284d8fcc3b018`.
 
 ---
 
@@ -506,8 +508,9 @@ git commit -m "feat(control): expose bounded room management API"
 - Modify: `.planning/REQUIREMENTS.md`
 - Modify: `.planning/ROADMAP.md`
 - Modify: `.planning/STATE.md`
+- Modify: `docs/superpowers/plans/2026-08-09-phase-2-in-memory-room-session.md`
 
-- [ ] **Step 1: Run the fresh phase gate from a clean candidate commit**
+- [x] **Step 1: Run the fresh phase gate from a clean candidate commit**
 
 ```bash
 make go-test
@@ -520,11 +523,11 @@ git status --short
 
 Expected: every command exits 0 and the source candidate is clean.
 
-- [ ] **Step 2: Record exact evidence**
+- [x] **Step 2: Record exact evidence**
 
 Evidence names the tested candidate SHA, D-03 ADR, Go version, commands/exits, exact boundary tests, random failure/collision results, race result, churn count/final counters, loopback HTTP result, and secret-redaction assertions. Do not include an operator token or generated grant.
 
-- [ ] **Step 3: Update only owned requirement status**
+- [x] **Step 3: Update only owned requirement status**
 
 After Step 1 is green:
 
@@ -533,13 +536,11 @@ After Step 1 is green:
 - mark Phase 2 checkbox/success criteria/plan count complete in ROADMAP;
 - move STATE current focus to Phase 3 and link ADR/evidence.
 
-- [ ] **Step 4: Commit status evidence**
+- [x] **Step 4: Prepare the scoped status-evidence handoff**
 
-```bash
-git add docs/evidence/m1/phase-2.md docs/PRD.md docs/TRD.md .planning/REQUIREMENTS.md .planning/ROADMAP.md .planning/STATE.md
-git diff --cached --check
-git commit -m "docs: verify in-memory room and session kernel"
-```
+The seven owned documentation files are updated and verified for the orchestrator-owned documentation commit. This subtask intentionally does not stage or commit shared-worktree changes.
+
+Observed: the clean candidate gate exited `0` for full tests, focused uncached protocol/store/control tests, store/control race tests, vet, and diff checks; the worktree was clean before and after. [Phase 2 evidence](../../evidence/m1/phase-2.md) records candidate `da02563124a605757b0f9ccbf66284d8fcc3b018`, exact boundary results, and secret-free provenance. Only ROOM-01, ROOM-02, and SESS-01 moved to complete; ROOM-03, SAFE-01, and every Phase 3 requirement remain pending.
 
 ---
 
@@ -556,6 +557,8 @@ Do not start Phase 3 implementation until all are evidenced from the current bra
 - Exact deadline, backward-wall/monotonic behavior, strict UTC-Z timestamp parsing, sweep, empty grace, tombstone, partial-expiry retry, random failure/collision, header-size/slow-header, concurrency, and 1,000-cycle churn tests pass.
 - Full tests, store/control race tests, vet, and diff checks exit 0.
 - Only ROOM-01, ROOM-02, and SESS-01 are marked complete; ROOM-03 and SAFE-01 remain pending for Phase 3.
+
+This Phase 2 exit gate passed. Phase 3 implementation must still wait for explicit Product, Security, and Operations owner approval of the currently unapproved D-04 packet/byte/fan-out policy candidate.
 
 ## Explicit exclusions
 

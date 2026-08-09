@@ -3,11 +3,11 @@
 | 항목 | 값 |
 |---|---|
 | 작성일 | 2026-08-08 |
-| 상태 | **Phase 1 wire contract implemented / Phase 2–7 runtime contract planned** |
+| 상태 | **Phases 1–2 protocol, store, and room-control HTTP implemented / Phase 3–7 planned** |
 | 대상 | Milestone 1–2, Phase 1–7 |
 | 관련 문서 | [PRD](./PRD.md), [PROJECT](../.planning/PROJECT.md), [REQUIREMENTS](../.planning/REQUIREMENTS.md), [ROADMAP](../.planning/ROADMAP.md) |
 
-> **구현 상태 경계:** Phase 1의 bounded Protobuf schema, generated Go/C#, codec, canonical HMAC transcript와 Go/C# compatibility gate는 구현·검증됐다. D-03 control/lifecycle 정책은 [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)로 승인됐지만 HTTP endpoint, room/session store, UDP runtime, Unity native, 운영·배포와 성능 계약은 아직 **planned**이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
+> **구현 상태 경계:** Phase 1의 bounded Protobuf contract와 Phase 2의 인메모리 room/grant store, expiry/cleanup, `PUT|GET|DELETE /v1/rooms/{room_id}` handler, Bearer 인증과 HTTP 상한은 구현·검증됐다. [Phase 2 evidence](./evidence/m1/phase-2.md)는 이 범위만 완료한다. 실행 binary/listener 조립, `/v1/status`, UDP bind/replay/relay, endpoint cleanup, Unity native, 운영·배포와 성능 계약은 아직 **planned**이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
 
 ## 1. 기술 목표, 비목표, 결정 요약
 
@@ -133,13 +133,13 @@ deploy/relay.service
 9. rebind가 성공하기 전까지 기존 binding은 유효하며, 성공과 동시에 새 random binding ID/endpoint로 교체한다.
 10. 프로세스 재시작은 모든 room/grant/challenge/binding을 의도적으로 무효화한다.
 
-## 4. Planned HTTP API contract
+## 4. HTTP API contract
 
-이 절의 모든 endpoint, schema와 예시는 **planned**다.
+Phase 2는 이 절의 room `PUT`/`GET`/`DELETE` handler와 schema, 엄격한 decoding, 인증, redaction, body/header/time bound를 구현·검증했다. 실행 binary의 listener 조립, VM/Docker bind mode, remote transport와 `/v1/status`는 Phase 5까지 **planned**다.
 
 ### 4.1 공통 규칙
 
-| 항목 | planned 계약 |
+| 항목 | 계약 |
 |---|---|
 | base URL | VM은 `http://127.0.0.1:8080`; Docker는 container `0.0.0.0:8080`을 host `127.0.0.1`에만 publish; 원격 접근은 host TLS proxy 또는 SSH tunnel이 담당 |
 | version prefix | `/v1` |
@@ -155,7 +155,7 @@ v1에는 arbitrary metadata JSON field가 없다. SAFE-01의 metadata boundary�
 
 missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 무관하게 `401`과 `WWW-Authenticate: Bearer`를 반환한다. token format과 startup validation은 §8.1의 정확히 43-character base64url 계약을 따른다. endpoint listing은 제공하지 않는다. canonical route만 허용해 trailing slash와 percent-encoded ID는 `404`; 허용되지 않은 method는 `405`와 `Allow`, body가 금지된 GET/DELETE에 body가 있으면 `400`, body가 있는 요청의 media type이 다르면 `415`다.
 
-### 4.2 공통 error envelope (planned)
+### 4.2 공통 error envelope
 
 ```json
 {
@@ -173,22 +173,22 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 
 고정 code는 `invalid_request`, `unauthorized`, `not_found`, `method_not_allowed`, `conflict`, `body_too_large`, `unsupported_media_type`, `capacity_exceeded`, `rate_limited`, `draining`, `internal_error`다. 대응 status는 각각 `400`, `401`, `404`, `405`, `409`, `413`, `415`, `422`, `429`, `503`, `500`이다. `/v1/status`의 `503`은 error envelope 대신 status schema를 반환한다.
 
-### 4.3 Endpoint summary (planned)
+### 4.3 Endpoint summary
 
-| method | path | auth | 성공 status | 목적 |
-|---|---|---|---|---|
-| `PUT` | `/v1/rooms/{room_id}` | operator Bearer | 최초 `201`, 동일 재시도 `200` | room과 participant grant 할당 |
-| `GET` | `/v1/rooms/{room_id}` | operator Bearer | `200` | secret이 redacted된 room 상태 |
-| `DELETE` | `/v1/rooms/{room_id}` | operator Bearer | 멱등 `204` | room 종료·전체 자격 폐기 |
-| `GET` | `/v1/status` | operator Bearer + private | ready `200`, 그 외 `503` | 단일 health + status surface |
+| method | path | auth | 성공 status | 목적 | 구현 상태 |
+|---|---|---|---|---|---|
+| `PUT` | `/v1/rooms/{room_id}` | operator Bearer | 최초 `201`, 동일 재시도 `200` | room과 participant grant 할당 | Phase 2 complete |
+| `GET` | `/v1/rooms/{room_id}` | operator Bearer | `200` | secret이 redacted된 room 상태 | Phase 2 complete |
+| `DELETE` | `/v1/rooms/{room_id}` | operator Bearer | 멱등 `204` | room 종료·전체 자격 폐기 | Phase 2 complete |
+| `GET` | `/v1/status` | operator Bearer + private | ready `200`, 그 외 `503` | 단일 health + status surface | Phase 5 planned |
 
 `/livez`, `/readyz`와 public health endpoint는 planned contract에 없다.
 
-### 4.4 `PUT /v1/rooms/{room_id}` (planned)
+### 4.4 `PUT /v1/rooms/{room_id}`
 
 `room_id`는 caller-supplied stable allocation ID다. 호출자는 한 번 사용한 ID를 의도적으로 재사용하지 않는다. 최초 valid definition은 room과 32-byte CSPRNG grant secret을 participant별로 만든다. byte-for-byte JSON이 아니라 정규화된 immutable field 값이 같으면 동일 정의다. timestamp는 같은 instant로, participants는 `(participant_id, session_id)` keyed set으로 비교하므로 JSON 순서는 의미가 없다.
 
-**Planned request example**
+**Request example**
 
 ```json
 {
@@ -209,7 +209,7 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 }
 ```
 
-| request field | type | required | planned validation |
+| request field | type | required | validation |
 |---|---|---|---|
 | path `room_id` | string | yes | ASCII `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; raw percent encoding 불허 |
 | `capacity` | uint32 | yes | v1은 membership mutation이 없으므로 `participants.length == capacity <= configured maximum` |
@@ -219,7 +219,7 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 | `session_id` | string | yes | 위와 같은 ASCII alphabet, UTF-8 byte length 1~64; room 내 unique |
 | `grant_expires_at` | timestamp | yes | 미래이고 `<= expires_at`, configured grant TTL 이내 |
 
-**Planned `201 Created` response example** (`200 OK` 동일 schema)
+**`201 Created` response example** (`200 OK` 동일 schema)
 
 ```json
 {
@@ -253,7 +253,7 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 }
 ```
 
-| response field | type | planned meaning |
+| response field | type | meaning |
 |---|---|---|
 | `room_id`, `state` | string | path ID; `state`는 `open` |
 | `created_at`, `expires_at` | timestamp | server creation time / authoritative room deadline |
@@ -267,11 +267,11 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 | `grant_secret` | base64url string | 32 random bytes, no padding; live grant의 PUT response에서만 노출 |
 | `grants[].state` | enum | `issued`, `bound`, `expired`, `revoked` |
 
-동일 `room_id`의 **open room**에 동일 immutable definition을 재시도하면 state를 새로 만들지 않고 `200`을 반환한다. live grant는 같은 secret/expiry를 반환한다. open room 안의 terminal grant를 재발급하거나 TTL을 연장하지 않으며 해당 항목은 secret을 생략한다. 다른 capacity, expiry, participant/session set 또는 grant expiry는 `409 conflict`다. room 자체가 terminal이거나 `now < tombstone_deadline`인 live tombstone이면 정의가 같아도 `409 conflict`이며 정상적인 새 allocation은 새 `room_id`를 사용한다. tombstone deadline부터 server는 same-ID record를 absent로 취급해 재생성을 막지 않지만 caller는 ID를 의도적으로 재사용하지 않는다. bounded tombstone은 지연된 재시도를 막는 안전창이지 영구 ID registry가 아니다. v1은 participant/session tuple마다 grant 하나, pending challenge 최대 하나, active binding 최대 하나를 허용한다.
+동일 `room_id`의 **open room**에 동일 immutable definition을 재시도하면 state를 새로 만들지 않고 `200`을 반환한다. live grant는 같은 secret/expiry를 반환한다. open room 안의 terminal grant를 재발급하거나 TTL을 연장하지 않으며 해당 항목은 secret을 생략한다. 다른 capacity, expiry, participant/session set 또는 grant expiry는 `409 conflict`다. room 자체가 terminal이거나 `now < tombstone_deadline`인 live tombstone이면 정의가 같아도 `409 conflict`이며 정상적인 새 allocation은 새 `room_id`를 사용한다. tombstone deadline부터 server는 same-ID record를 absent로 취급해 재생성을 막지 않지만 caller는 ID를 의도적으로 재사용하지 않는다. bounded tombstone은 지연된 재시도를 막는 안전창이지 영구 ID registry가 아니다. Phase 2는 participant/session tuple마다 grant 하나를 구현했고, pending challenge 하나와 active binding 하나 제한은 Phase 3 계약이다.
 
-### 4.5 `GET /v1/rooms/{room_id}` (planned)
+### 4.5 `GET /v1/rooms/{room_id}`
 
-**Planned `200 OK` response example**
+**`200 OK` response example**
 
 ```json
 {
@@ -288,9 +288,9 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
     {
       "participant_id": "player-a",
       "session_id": "session-a",
-      "grant_state": "bound",
+      "grant_state": "issued",
       "grant_expires_at": "2026-08-08T12:30:00Z",
-      "binding_state": "bound"
+      "binding_state": "unbound"
     },
     {
       "participant_id": "player-b",
@@ -303,17 +303,17 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 }
 ```
 
-| field | type | planned meaning |
+| field | type | meaning |
 |---|---|---|
 | room 공통 필드 | PUT response와 동일 | secret 제외 상태 snapshot |
-| `participants[].grant_state` | enum | `issued`, `bound`, `expired`, `revoked` |
-| `participants[].binding_state` | enum | `unbound`, `bound`, `rebind_pending`, `expired`, `revoked` |
+| `participants[].grant_state` | enum | Phase 2는 `issued`, `expired`, `revoked`; `bound`는 Phase 3 planned |
+| `participants[].binding_state` | enum | Phase 2는 `unbound`, `expired`, `revoked`; `bound`, `rebind_pending`은 Phase 3 planned |
 
 `grant_secret`, derived key, challenge nonce, binding ID와 observed endpoint는 절대 포함하지 않는다. room이 access-time expiry, DELETE 또는 empty 판정으로 terminal이 되는 순간부터 physical cleanup 전이라도 GET은 `404`다. tombstone 존재 여부도 노출하지 않는다. 같은 ID의 PUT은 tombstone window 동안 `409`다.
 
-### 4.6 `DELETE /v1/rooms/{room_id}` (planned)
+### 4.6 `DELETE /v1/rooms/{room_id}`
 
-request body는 허용하지 않는다. open room은 즉시 종료하고 grant/challenge/binding을 원자적으로 revoke한다. 이것이 v1의 유일한 명시적 revoke 동작이며 개별 participant revoke endpoint는 없다. 이미 종료·만료·삭제됐거나 한 번도 없던 ID도 `204 No Content`이며 response body가 없다. previously-known room만 bounded tombstone을 남겨 동일 PUT의 즉시 resurrection을 막는다. 한 번도 없던 ID의 DELETE는 미래의 정상 생성을 막는 tombstone을 만들지 않으며, tombstone은 GET에서 보이지 않는다.
+request body는 허용하지 않는다. open room은 즉시 종료하고 Phase 2의 grant를 원자적으로 revoke한다. Phase 3는 같은 room-wide 동작에 challenge와 binding 폐기를 추가해 ROOM-03을 닫는다. 이것이 v1의 유일한 명시적 revoke 동작이며 개별 participant revoke endpoint는 없다. 이미 종료·만료·삭제됐거나 한 번도 없던 ID도 `204 No Content`이며 response body가 없다. previously-known room만 bounded tombstone을 남겨 동일 PUT의 즉시 resurrection을 막는다. 한 번도 없던 ID의 DELETE는 미래의 정상 생성을 막는 tombstone을 만들지 않으며, tombstone은 GET에서 보이지 않는다.
 
 ### 4.7 `GET /v1/status` (planned)
 
@@ -499,9 +499,9 @@ fresh room의 issued live grants는 live sessions로 간주하므로 아직 bind
 
 v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client socket close는 UDP에서 관찰 가능한 수명주기 사건이 아니므로 “마지막 session 이탈”은 room의 모든 grant와 binding이 expiry 또는 room DELETE로 terminal이 된 시점을 뜻한다. 만료·폐기된 grant는 같은 room에서 갱신하지 않고 관리 계층이 새 `room_id`로 전체 allocation을 만든다.
 
-### 6.2 Expiry / cleanup contract (planned)
+### 6.2 Expiry / cleanup contract (room/grant implemented; binding remainder planned)
 
-- [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)가 아래 수명주기 수치와 상한을 승인했다. 구현과 ROOM-03 전체 판정은 아직 planned다.
+- [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)가 아래 수명주기 수치와 상한을 승인했다. Phase 2는 room/grant expiry, DELETE, empty grace와 tombstone cleanup을 [검증](./evidence/m1/phase-2.md)했다. endpoint/binding cleanup을 포함한 ROOM-03 전체 판정은 Phase 3에 남아 있다.
 - HTTP timestamp는 RFC 3339 UTC로 검증·표시한다. 생성 시 `expires_at - wall_now` duration을 `time.Now()`에서 파생한 monotonic deadline으로 바꾸고 프로세스 내 권한 판정은 그 deadline만 사용해 NTP backward step이 자격을 연장하지 않게 한다.
 - 모든 access path가 deadline을 먼저 검사하므로 권한은 `now >= deadline`에서 끝나고 sweep 지연이 연장하지 않는다. terminal 판정 즉시 외부 GET은 `404`, PUT은 tombstone 동안 `409`다.
 - 논리적으로 terminal이지만 pre-sweep인 room/grant는 `Expire` 또는 그 state를 직접 다루는 operation의 cleanup이 해제할 때까지 `max_rooms`/`max_active_sessions` counter를 계속 소비한다. 이로 인한 보수적 admission 지연은 최대 한 `1s` sweep이고 권한을 연장하지 않는다. 관련 없는 `CreateRoom`은 다른 record를 스캔해 counter를 lazy reclaim하지 않는다.
@@ -515,9 +515,9 @@ v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client so
 - tombstone은 `now < tombstone_deadline`인 동안만 same-ID PUT을 막는다. 생성 후 정확히 `60s`인 deadline에서는 sweeper 전이어도 access path가 stale record를 제거하거나 absent로 취급하며 새 PUT이 같은 ID를 사용할 수 있다. 반복 DELETE와 `Expire`는 tombstone deadline을 갱신하지 않고 physical removal은 최대 한 sweep 뒤이므로 총 상한은 `61s`다.
 - `crypto/rand` 오류는 partial state를 만들지 않는다. HTTP headers 전이면 `500 internal_error`를 반환한 뒤, UDP 경로면 침묵한 뒤 process를 `unhealthy`로 전환해 non-zero 종료한다. random ID 충돌은 overwrite하지 않고 최대 8회 재생성하며 계속 충돌하면 같은 fatal 경로를 사용한다.
 
-### 6.3 Admission / fan-out limits (planned)
+### 6.3 Admission / fan-out limits (HTTP implemented; UDP/fan-out planned)
 
-mutation 또는 fan-out 전에 다음 hard limit을 적용한다: HTTP body, metadata length, room count, room capacity, active session/challenge count, room/grant/binding TTL, total datagram. traffic budget은 pre-auth canonical source, bound session, room, process 각 층의 packet/byte token bucket과 room/process fan-out write/byte circuit breaker다.
+Phase 2는 HTTP body/header, identifier, room/record/capacity/live-grant, room/grant TTL, request-rate와 concurrency hard limit을 body work 또는 mutation 전에 적용했다. Phase 3는 active challenge/binding, total datagram, pre-auth canonical source, bound session, room, process 각 층의 packet/byte token bucket과 room/process fan-out write/byte circuit breaker를 구현해 SAFE-01~03을 닫는다.
 
 pre-auth source key는 port를 제외한 IPv4 `/32` 또는 IPv6 `/64` prefix다. source bucket table은 기본 4096 entries와 60초 idle TTL로 bounded하며 sweeper가 제거한다. table이 가득 차면 새 key의 HELLO는 새 state를 만들지 않고 침묵한다. 이 단순 정책의 ceiling은 table-fill 동안 신규 source admission 저하이며, Phase 7에서 실제 문제가 확인될 때만 fixed-shard admission으로 바꾼다.
 
@@ -558,13 +558,13 @@ strict JSON config file의 일반 값 우선순위는 CLI flag > `RELAY_*` envir
 
 [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)로 승인된 D-03 compiled default/hard maximum은 max open rooms `256`, total resident room records `4096`, room capacity `16`, active sessions/live grants `4096`, request-required room/grant TTL 각각 최대 `2h`, sweep `1s`, empty grace `5s`, tombstone TTL `60s`다. total record는 open, empty-grace, terminal/pre-sweep와 tombstone을 포함한 모든 non-absent record를 계산한다. room/participant/session ID는 `1..64` ASCII bytes와 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`를 모두 만족하고 arbitrary metadata는 없으며 unknown JSON field는 거부한다. HTTP 상한은 `MaxHeaderBytes=16 KiB`, body `64 KiB`, read-header `2s`, read/write `5s`, idle `30s`, global `20 requests/s` burst `40`, concurrent handlers `32`다. 모든 configurable D-03 default는 동일한 hard maximum이며 향후 설정은 양의 유한한 값으로 상한만 낮출 수 있고 `0`, unlimited 또는 다른 disable 값을 허용하지 않는다. HTTP limiter 또는 semaphore admission 실패는 body를 읽기 전에 `429 rate_limited`다.
 
-D-03 밖의 현재 planned default는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, challenge TTL `3s`, binding TTL `60s`, source buckets `4096`/idle `60s`, drain grace `250ms`, shutdown `5s`, UDP write `2ms`/hard max `20ms`다. UDP traffic rate/burst와 fan-out budget은 Phase 3 D-04 승인 전까지 open이다.
+D-03 밖의 현재 planned default는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, challenge TTL `3s`, binding TTL `60s`, source buckets `4096`/idle `60s`, drain grace `250ms`, shutdown `5s`, UDP write `2ms`/hard max `20ms`다. UDP traffic rate/burst와 fan-out budget 후보는 미승인이며 Product + Security + Operations owner의 D-04 승인 전까지 Phase 3 구현을 시작하지 않는다.
 
 `udp4`는 IPv4 listen address와 advertised A record만, `udp6`는 IPv6 listen address와 advertised AAAA record만 허용한다. 한 process에서 dual-stack 두 socket을 열거나 OS별 mapped-address 동작에 의존하지 않는다. Phase 4는 server를 각 mode로 별도 실행해 승인된 IPv4/IPv6/NAT64 matrix를 검증한다.
 
 operator token은 CSPRNG 32 bytes를 unpadded base64url로 인코딩한 정확히 43 ASCII characters(`[A-Za-z0-9_-]{43}`)다. file source에서 한 개의 trailing LF와 optional preceding CR만 제거하며 env value는 그대로 사용한다. 두 source가 함께 있거나 secret file 권한이 group/other-readable이면 startup 실패다. rotation은 restart가 필요하고 모든 room/grant state를 잃으므로 runbook이 새 allocation 순서를 포함한다. loopback mode의 non-loopback bind, container mode의 non-wildcard bind, chosen UDP family와 맞지 않는 listen/advertised DNS, missing/invalid secret, impossible TTL ordering 또는 non-positive limit은 socket open 전 safe error와 non-zero exit로 실패한다. Relay는 host publish를 볼 수 없으므로 Docker rehearsal이 `127.0.0.1:hostPort:containerPort/tcp`와 외부 비도달성을 검사한다.
 
-typed config와 control limits는 Phase 2, UDP limits와 checked-in traffic profile은 Phase 3에서 먼저 사용한다. Phase 5의 OPS-01은 이를 새로 발명하지 않고 flag/env/file loading, precedence, redacted error와 lifecycle composition을 완성한다.
+Phase 2는 store `Limits`와 HTTP `Config`에서 control hard maximum validation을 구현했다. Phase 3은 승인된 UDP limit을 추가하고, Phase 5의 OPS-01은 이 값을 새로 발명하지 않고 flag/env/file loading, precedence, redacted error와 lifecycle composition으로 연결한다.
 
 ### 8.2 Planned observability
 
@@ -591,7 +591,9 @@ startup은 HTTP와 UDP bind가 모두 성공한 뒤에만 owned goroutine을 시
 - Docker는 `management_mode=container`로 container `0.0.0.0:8080`을 열고 `127.0.0.1:hostPort:8080/tcp`로만 publish한다. UDP는 `hostPort:containerPort/udp`로 명시 publish한다. 원격 operator는 host가 제공하는 TLS proxy 또는 SSH tunnel을 사용하며 Relay image는 TLS key나 CA bundle을 소유하지 않는다.
 - listen address와 advertised public UDP endpoint를 분리한다. runbook은 DNS, firewall/NAT, secret, restart, CPU/memory/FD limit, log rotation, upgrade/rollback과 expected state loss를 포함한다.
 
-## 9. Verification strategy (planned)
+## 9. Verification strategy and evidence
+
+Phase 2는 아래 unit/HTTP/race 전략 중 room/grant store와 room-control HTTP 부분을 [현재 증거](./evidence/m1/phase-2.md)로 닫았다. `/v1/status`, UDP, Unity, load·soak와 failure drill 항목은 각 후속 Phase의 required evidence다.
 
 | layer | required evidence |
 |---|---|
@@ -609,15 +611,15 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 
 ## 10. Requirement -> component -> Phase traceability
 
-아래는 승인된 v1 requirement **29/29**를 정확히 한 Phase에 매핑한다. PROT-01/PROT-02 2개는 완료됐고 나머지 27개는 `Pending`이다.
+아래는 승인된 v1 requirement **29/29**를 정확히 한 Phase에 매핑한다. PROT-01/PROT-02와 ROOM-01/ROOM-02/SESS-01, 총 5개는 완료됐고 나머지 24개는 `Pending`이다.
 
 | Requirement | 책임 컴포넌트 / 검증 | Phase | Status |
 |---|---|---|---|
 | PROT-01 | protocol codec + shared proto | Phase 1 | Complete |
 | PROT-02 | Buf generation + Go/C# golden fixture | Phase 1 | Complete |
-| ROOM-01 | management HTTP + store | Phase 2 | Pending |
-| ROOM-02 | management HTTP auth/redaction + store | Phase 2 | Pending |
-| SESS-01 | store + `crypto/rand` issuance + room DELETE revocation | Phase 2 | Pending |
+| ROOM-01 | management HTTP + store | Phase 2 | Complete |
+| ROOM-02 | management HTTP auth/redaction + store | Phase 2 | Complete |
+| SESS-01 | store + `crypto/rand` issuance + room DELETE revocation | Phase 2 | Complete |
 | ROOM-03 | store + expiry sweeper + binding cleanup | Phase 3 | Pending |
 | SESS-02 | UDP adapter + challenge/binding store | Phase 3 | Pending |
 | SESS-03 | protocol HMAC/replay + UDP authorization | Phase 3 | Pending |
@@ -654,7 +656,7 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 | transport threat acceptance | **Accepted:** off-path ingress spoof/replay와 exact-source-only downstream baseline; confidentiality, 완전한 on-path/downstream integrity, traffic-analysis protection 제외; replay window 64-bit. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Product + Protocol & Security owners |
 | wire caps | **Accepted:** revision 1, datagram 1200, payload 900, ID 64 bytes; measured ClientData/ServerData 1103/1117 bytes. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Protocol & Network validation owner |
 | control/lifecycle policy | **Accepted:** compiled defaults = hard maxima; open rooms/records/capacity/sessions `256`/`4096`/`16`/`4096`, request-required room/grant TTL max `2h`, sweep/empty/tombstone `1s`/`5s`/`60s`, fixed ID·HTTP bounds and cleanup 상한. [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md) | Phase 2 | Product + Room/Session kernel owners |
-| packet policy defaults | replay window는 D-01에서 64-bit로 확정. source/session/room/global packet·byte rates와 fan-out budget은 여전히 Phase 3 D-04 open decision | Phase 3 | UDP Relay owner |
+| packet policy defaults | replay window는 D-01에서 64-bit로 확정. source/session/room/global packet·byte rates와 fan-out budget 후보는 미승인이며 Product + Security + Operations owner가 승인할 때까지 Phase 3 implementation을 block하는 D-04 open decision | Phase 3 | Product + Security + Operations + UDP Relay owners |
 | Unity support matrix | Unity 6.3 LTS baseline; exact editor patch/device/Mono/IL2CPP/IPv6 matrix 미주장 | Phase 4 | Unity integration owner |
 | health/drain timing | status transition, planned drain 250ms와 shutdown 5s를 승인하거나 더 낮은 bounded 값으로 조정 | Phase 5 | Operations + Lifecycle owners |
 | deployment profile | Linux host/GOARCH, Docker host-loopback publish와 원격 TLS proxy/SSH 방식, resource limits | Phase 6 | Product + Operations owners |
