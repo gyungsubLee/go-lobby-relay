@@ -7,7 +7,7 @@
 | 대상 | Milestone 1–2, Phase 1–7 |
 | 관련 문서 | [PRD](./PRD.md), [PROJECT](../.planning/PROJECT.md), [REQUIREMENTS](../.planning/REQUIREMENTS.md), [ROADMAP](../.planning/ROADMAP.md) |
 
-> **구현 상태 경계:** Phase 1의 bounded Protobuf schema, generated Go/C#, codec, canonical HMAC transcript와 Go/C# compatibility gate는 구현·검증됐다. HTTP endpoint, room/session store, UDP runtime, Unity native, 운영·배포와 성능 계약은 아직 **planned**이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
+> **구현 상태 경계:** Phase 1의 bounded Protobuf schema, generated Go/C#, codec, canonical HMAC transcript와 Go/C# compatibility gate는 구현·검증됐다. D-03 control/lifecycle 정책은 [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)로 승인됐지만 HTTP endpoint, room/session store, UDP runtime, Unity native, 운영·배포와 성능 계약은 아직 **planned**이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
 
 ## 1. 기술 목표, 비목표, 결정 요약
 
@@ -501,14 +501,18 @@ v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client so
 
 ### 6.2 Expiry / cleanup contract (planned)
 
+- [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)가 아래 수명주기 수치와 상한을 승인했다. 구현과 ROOM-03 전체 판정은 아직 planned다.
 - HTTP timestamp는 RFC 3339 UTC로 검증·표시한다. 생성 시 `expires_at - wall_now` duration을 `time.Now()`에서 파생한 monotonic deadline으로 바꾸고 프로세스 내 권한 판정은 그 deadline만 사용해 NTP backward step이 자격을 연장하지 않게 한다.
-- 모든 access path가 deadline을 먼저 검사하므로 expired 권한은 sweep 지연 동안에도 사용되지 않는다. terminal 판정 즉시 외부 GET은 `404`, PUT은 tombstone 동안 `409`다.
-- sweeper 하나가 configured interval마다 `Expire(now)`를 호출한다. per-room/session timer는 없다.
+- 모든 access path가 deadline을 먼저 검사하므로 권한은 `now >= deadline`에서 끝나고 sweep 지연이 연장하지 않는다. terminal 판정 즉시 외부 GET은 `404`, PUT은 tombstone 동안 `409`다.
+- 논리적으로 terminal이지만 pre-sweep인 room/grant는 `Expire` 또는 그 state를 직접 다루는 operation의 cleanup이 해제할 때까지 `max_rooms`/`max_active_sessions` counter를 계속 소비한다. 이로 인한 보수적 admission 지연은 최대 한 `1s` sweep이고 권한을 연장하지 않는다. 관련 없는 `CreateRoom`은 다른 record를 스캔해 counter를 lazy reclaim하지 않는다.
+- sweeper 하나가 승인된 `1s` interval마다 `Expire(now)`를 호출한다. per-room/session timer는 없다.
 - challenge, binding, grant, room 순서로 만료하고 관련 reverse index를 같은 lock 안에서 제거한다.
-- DELETE는 즉시 grant/challenge/binding을 revoke하고 room을 bounded tombstone으로 바꾼다.
+- DELETE는 즉시 grant/challenge/binding을 revoke하고 secret-bearing state를 제거한 뒤 room을 bounded tombstone으로 바꾼다.
 - tombstone은 room ID와 terminal/tombstone deadline만 보존하고 participant, grant secret, key, endpoint와 payload를 보존하지 않는다.
-- open room record를 tombstone으로 in-place 전환하므로 DELETE가 record 수를 늘리지 않는다. `open + tombstone <= max_room_records`이며 한도에서는 새 PUT을 `capacity_exceeded`로 거부한다.
-- 자연 만료의 `empty_since`는 sweeper가 발견한 시간이 아니라 마지막 live grant/binding의 실제 monotonic terminal deadline이다. `empty_deadline = empty_since + empty_grace`이며 physical cleanup은 그 deadline 뒤 최대 한 sweep interval 안이다. DELETE는 즉시 tombstone으로 전이한다.
+- open room record를 tombstone으로 in-place 전환하므로 DELETE가 record 수를 늘리지 않는다. `max_room_records=4096`은 open뿐 아니라 empty grace 대기, 논리적 terminal/pre-sweep와 tombstone을 포함한 모든 non-absent `roomsByID` resident record를 계산한다. 한도에서는 새 PUT을 `capacity_exceeded`로 거부한다.
+- room TTL physical cleanup은 논리적 deadline 후 최대 한 sweep, 즉 `1s` 안에 완료한다.
+- 자연 만료의 `empty_since`는 sweeper가 발견한 시간이 아니라 마지막 live grant/binding의 실제 monotonic terminal deadline이다. `empty_deadline = empty_since + 5s`이며 physical cleanup은 그 deadline 뒤 최대 한 sweep 안이므로 총 상한은 `6s`다. DELETE는 즉시 tombstone으로 전이한다.
+- tombstone은 `now < tombstone_deadline`인 동안만 same-ID PUT을 막는다. 생성 후 정확히 `60s`인 deadline에서는 sweeper 전이어도 access path가 stale record를 제거하거나 absent로 취급하며 새 PUT이 같은 ID를 사용할 수 있다. 반복 DELETE와 `Expire`는 tombstone deadline을 갱신하지 않고 physical removal은 최대 한 sweep 뒤이므로 총 상한은 `61s`다.
 - `crypto/rand` 오류는 partial state를 만들지 않는다. HTTP headers 전이면 `500 internal_error`를 반환한 뒤, UDP 경로면 침묵한 뒤 process를 `unhealthy`로 전환해 non-zero 종료한다. random ID 충돌은 overwrite하지 않고 최대 8회 재생성하며 계속 충돌하면 같은 fatal 경로를 사용한다.
 
 ### 6.3 Admission / fan-out limits (planned)
@@ -552,7 +556,9 @@ strict JSON config file의 일반 값 우선순위는 CLI flag > `RELAY_*` envir
 | traffic | `management_request_rate`, `management_request_burst`, `preauth_source_packet_rate`, `preauth_source_packet_burst`, `preauth_source_byte_rate`, `preauth_source_byte_burst`, `session_packet_rate`, `session_packet_burst`, `session_byte_rate`, `session_byte_burst`, `room_packet_rate`, `room_packet_burst`, `room_byte_rate`, `room_byte_burst`, `global_packet_rate`, `global_packet_burst`, `global_byte_rate`, `global_byte_burst`, `room_fanout_write_rate`, `room_fanout_write_burst`, `room_fanout_byte_rate`, `room_fanout_byte_burst`, `global_fanout_write_rate`, `global_fanout_write_burst`, `global_fanout_byte_rate`, `global_fanout_byte_burst`, `udp_write_timeout` |
 | operation | log level/format, config file path |
 
-planned compiled defaults/hard caps는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, max open rooms 256, total room records 4096, room capacity 16, active sessions 4096, challenge TTL 3s, binding TTL 60s, sweep 1s, empty grace 5s, tombstone TTL 60s, source buckets 4096/idle 60s, drain grace 250ms, shutdown 5s, UDP write 2ms/hard max 20ms다. room/grant TTL hard max의 planned baseline은 각각 2h이며 grant/binding은 room deadline을 넘지 않는다. HTTP fixed bounds는 `MaxHeaderBytes=16 KiB`, body 64 KiB, read-header 2s, read/write 5s, idle 30s, global 20 requests/s burst 40과 concurrent handlers 32다. HTTP limiter 또는 semaphore admission 실패는 body를 읽기 전에 `429 rate_limited`다. control/lifecycle 수치는 D-03, UDP traffic rate/burst와 fan-out budget은 D-04에서 해당 구현 전에 승인하며 unlimited/zero-disable은 허용하지 않는다.
+[ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)로 승인된 D-03 compiled default/hard maximum은 max open rooms `256`, total resident room records `4096`, room capacity `16`, active sessions/live grants `4096`, request-required room/grant TTL 각각 최대 `2h`, sweep `1s`, empty grace `5s`, tombstone TTL `60s`다. total record는 open, empty-grace, terminal/pre-sweep와 tombstone을 포함한 모든 non-absent record를 계산한다. room/participant/session ID는 `1..64` ASCII bytes와 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`를 모두 만족하고 arbitrary metadata는 없으며 unknown JSON field는 거부한다. HTTP 상한은 `MaxHeaderBytes=16 KiB`, body `64 KiB`, read-header `2s`, read/write `5s`, idle `30s`, global `20 requests/s` burst `40`, concurrent handlers `32`다. 모든 configurable D-03 default는 동일한 hard maximum이며 향후 설정은 양의 유한한 값으로 상한만 낮출 수 있고 `0`, unlimited 또는 다른 disable 값을 허용하지 않는다. HTTP limiter 또는 semaphore admission 실패는 body를 읽기 전에 `429 rate_limited`다.
+
+D-03 밖의 현재 planned default는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, challenge TTL `3s`, binding TTL `60s`, source buckets `4096`/idle `60s`, drain grace `250ms`, shutdown `5s`, UDP write `2ms`/hard max `20ms`다. UDP traffic rate/burst와 fan-out budget은 Phase 3 D-04 승인 전까지 open이다.
 
 `udp4`는 IPv4 listen address와 advertised A record만, `udp6`는 IPv6 listen address와 advertised AAAA record만 허용한다. 한 process에서 dual-stack 두 socket을 열거나 OS별 mapped-address 동작에 의존하지 않는다. Phase 4는 server를 각 mode로 별도 실행해 승인된 IPv4/IPv6/NAT64 matrix를 검증한다.
 
@@ -647,7 +653,7 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 |---|---|---|---|
 | transport threat acceptance | **Accepted:** off-path ingress spoof/replay와 exact-source-only downstream baseline; confidentiality, 완전한 on-path/downstream integrity, traffic-analysis protection 제외; replay window 64-bit. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Product + Protocol & Security owners |
 | wire caps | **Accepted:** revision 1, datagram 1200, payload 900, ID 64 bytes; measured ClientData/ServerData 1103/1117 bytes. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Protocol & Network validation owner |
-| control/lifecycle policy | §8.1 planned defaults/caps를 boundary/churn evidence로 승인하거나 hard cap 아래로 조정 | Phase 2 | Room/Session kernel owner |
+| control/lifecycle policy | **Accepted:** compiled defaults = hard maxima; open rooms/records/capacity/sessions `256`/`4096`/`16`/`4096`, request-required room/grant TTL max `2h`, sweep/empty/tombstone `1s`/`5s`/`60s`, fixed ID·HTTP bounds and cleanup 상한. [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md) | Phase 2 | Product + Room/Session kernel owners |
 | packet policy defaults | replay window는 D-01에서 64-bit로 확정. source/session/room/global packet·byte rates와 fan-out budget은 여전히 Phase 3 D-04 open decision | Phase 3 | UDP Relay owner |
 | Unity support matrix | Unity 6.3 LTS baseline; exact editor patch/device/Mono/IL2CPP/IPv6 matrix 미주장 | Phase 4 | Unity integration owner |
 | health/drain timing | status transition, planned drain 250ms와 shutdown 5s를 승인하거나 더 낮은 bounded 값으로 조정 | Phase 5 | Operations + Lifecycle owners |

@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-08-08)
 
 Phase: 2 of 7 (In-Memory Room and Session Kernel)
 Plan: 0 of 1 in current phase
-Status: Phase 1 complete — awaiting D-03 approval before Phase 2 execution
-Last activity: 2026-08-09 — Phase 1 clean-candidate gate passed and D-01/D-02 were accepted
+Status: Phase 1 complete — D-03 accepted; Phase 2 ready for execution
+Last activity: 2026-08-09 — D-03 control/lifecycle policy accepted in ADR 0002; Phase 2 implementation remains pending
 
 Progress: [█░░░░░░░░░] 14%
 
@@ -57,11 +57,12 @@ Decisions are logged in PROJECT.md Key Decisions table and authoritative ADRs.
 - [Milestone 2]: One Docker host operates the same revision as a reproducible CGO-free release artifact.
 - [D-01]: Accepted off-path authenticated ingress/replay protection and exact-source-only downstream baseline, with no payload confidentiality, complete on-path/downstream cryptographic integrity, or traffic-analysis protection. Replay is a binding-scoped 64-bit sliding window. See [ADR 0001](../docs/decisions/0001-m1-wire-and-threat-boundary.md).
 - [D-02]: Accepted protocol revision `1`, datagram `1200`, payload `900`, ID `1..64` ASCII bytes, and unsupported-revision rejection; measured worst-case envelopes are `1103`/`1117` bytes. See [ADR 0001](../docs/decisions/0001-m1-wire-and-threat-boundary.md).
+- [D-03]: Accepted compiled defaults as hard maxima: open rooms/records/capacity/sessions `256`/`4096`/`16`/`4096`, request-required room/grant TTL max `2h`, sweep/empty/tombstone `1s`/`5s`/`60s`, strict 64-byte ASCII IDs, HTTP header/body/timeouts and management admission bounds. Authority ends at `now >= deadline`; DELETE clears secrets and creates a tombstone immediately; room/empty/tombstone cleanup completes within `1s`/`6s`/`61s`. Future configuration may only lower positive finite values and cannot disable limits. See [ADR 0002](../docs/decisions/0002-m1-control-lifecycle-policy.md).
 - [D-04 boundary]: D-01 fixed only the 64-bit replay window. Source/session/room/global packet·byte rates and fan-out budgets remain open for Phase 3.
 
 ### Pending Todos
 
-- Record product/Room-Session owner approval of D-03 before Phase 2 acceptance tests and execution.
+- Execute the approved Phase 2 plan; keep ROOM-01, ROOM-02, SESS-01, SAFE-01, ROOM-03, and Phase 2 incomplete until their assigned verification gates pass.
 
 ### Blockers/Concerns
 
@@ -80,5 +81,5 @@ Decisions are logged in PROJECT.md Key Decisions table and authoritative ADRs.
 ## Session Continuity
 
 Last session: 2026-08-09
-Stopped at: Phase 1 accepted; Phase 2 plan is ready but D-03 approval is not yet recorded
+Stopped at: D-03 accepted in ADR 0002; Phase 2 plan is ready for execution but no Phase 2 requirement is complete
 Resume file: docs/superpowers/plans/2026-08-09-phase-2-in-memory-room-session.md

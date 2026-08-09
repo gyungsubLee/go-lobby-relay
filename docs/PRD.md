@@ -211,6 +211,8 @@ Phase 매핑은 요구사항 전체를 최종 판정하는 **acceptance owner**�
 - v1 지원 증거의 최소 범위는 제품 책임자가 Phase 4 전에 고정한 **PC native target 1개와 mobile native target 1개(Android 또는 iOS)**다. 검증하지 않은 platform/runtime/network 조합은 지원한다고 주장하지 않는다.
 - 모든 management endpoint는 Bearer 인증이 필수다. VM에서는 loopback listener, Docker에서는 container network namespace 안의 listener를 host `127.0.0.1`에만 publish한다. 원격 운영은 host-side TLS proxy 또는 SSH tunnel을 사용하며 private network라는 이유로 unauthenticated status를 만들지 않는다. OPS-02의 “private 또는 authenticated”는 최소 요구이며 v1 planned contract는 둘을 함께 적용한다.
 - SAFE-01의 `metadata`는 별도 arbitrary JSON object가 아니라 room/participant/session ID와 HTTP header를 뜻한다. v1은 사용자 정의 metadata 필드를 만들지 않고 ID 64 bytes, header 16 KiB 상한으로 판정한다.
+- [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)는 D-03 compiled default와 hard maximum을 동일하게 승인했다: open room `256`, 모든 non-absent resident room record `4096`, room별 participant `16`, active session/live grant `4096`, request-required room/grant TTL 각각 최대 `2h`, sweep `1s`, empty grace `5s`, tombstone TTL `60s`, ID `1..64` ASCII bytes (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`), HTTP header/body `16 KiB`/`64 KiB`, read-header/read/write/idle timeout `2s`/`5s`/`5s`/`30s`, global management `20 requests/s` burst `40`, concurrent handler `32`. 향후 설정은 양의 유한한 값으로 상한만 낮출 수 있고 상향하거나 무제한/비활성화할 수 없다.
+- D-03 권한은 `now >= deadline`에서 sweep을 기다리지 않고 끝난다. DELETE는 즉시 secret-bearing state를 제거하고 tombstone으로 전이하며, room TTL cleanup은 최대 `1s`, 마지막 live grant/binding의 논리적 종료 후 empty cleanup은 grace를 포함해 최대 `6s`, tombstone 제거는 생성 후 최대 `61s`에 완료한다.
 
 ## 7. Phase 1~7 로드맵
 
@@ -307,7 +309,7 @@ M2는 Phase 5~7의 success criteria가 모두 충족되고 다음 운영 결과�
 |---|---|---|---|
 | D-01 | **Accepted:** off-path ingress spoof/replay 방지와 exact-source-only downstream 경계를 수용한다. payload confidentiality, 완전한 on-path/downstream cryptographic integrity와 traffic-analysis protection은 v1 범위 밖이며, binding별 replay는 64-bit sliding window로 고정한다. | 제품 책임자(위협 수용), Go 보안 책임자(설계 검토) | 2026-08-09 — [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) |
 | D-02 | **Accepted:** revision `1`, 전체 envelope 포함 datagram `1200`, payload `900`, ID `1..64` ASCII bytes, unsupported revision 거부. worst-case ClientData/ServerData는 `1103`/`1117` bytes다. | Go protocol 책임자(측정안), Unity 책임자(대상 network 검증), 제품 책임자(승인) | 2026-08-09 — [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) |
-| D-03 | room 수·정원·active session, grant TTL, metadata/body limit, expiry sweep와 cleanup deadline의 기본값·상한 | 제품 책임자(정책), Go 책임자(안전성) | **Phase 2 acceptance test 작성 전에 승인할 결정** |
+| D-03 | **Accepted:** control/lifecycle compiled default를 hard maximum으로 고정하고 `now >= deadline` 권한 종료, DELETE 즉시 secret 제거·tombstone, room/empty/tombstone cleanup 최대 `1s`/`6s`/`61s`를 수용한다. | 제품 책임자(정책), Go 책임자(안전성) | 2026-08-09 — [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md) |
 | D-04 | pre-auth source, session, room, global packet·byte·fan-out budget과 rate-limit 기본값 | Go 보안 책임자(남용 모델), 제품 책임자(정상 부하), 운영 책임자(host 한계) | **Phase 3 abuse test 작성 전에 승인할 결정** |
 | D-05 | 최소 PC target 1개와 Android/iOS 중 mobile target 1개를 포함한 정확한 Unity editor patch, 기기, Mono/IL2CPP 및 IPv4/IPv6/NAT64 검증 matrix | Unity 책임자(실행 가능성), 제품 책임자(지원 주장) | **Phase 4 시작 전에 승인할 결정** |
 | D-06 | health 전환과 process shutdown deadline | 초기 운영 책임자(운영 요구), Go 책임자(종료 검증) | **Phase 5 acceptance test 작성 전에 승인할 결정** |
