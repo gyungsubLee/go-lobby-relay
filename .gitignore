@@ -2,6 +2,7 @@
 .cache/
 .tools/
 out/
+test/compat/csharp/obj/
 unity/RelaySample/Library/
 unity/RelaySample/Logs/
 unity/RelaySample/Temp/
