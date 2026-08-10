@@ -3,11 +3,11 @@
 | 항목 | 값 |
 |---|---|
 | 작성일 | 2026-08-08 |
-| 상태 | **Phases 1–2 protocol, store, and room-control HTTP implemented / Phase 3–7 planned** |
+| 상태 | **Phases 1–3 protocol, room/session, authenticated UDP Relay, and minimum single-process runtime implemented / Phase 4–7 pending** |
 | 대상 | Milestone 1–2, Phase 1–7 |
 | 관련 문서 | [PRD](./PRD.md), [PROJECT](../.planning/PROJECT.md), [REQUIREMENTS](../.planning/REQUIREMENTS.md), [ROADMAP](../.planning/ROADMAP.md) |
 
-> **구현 상태 경계:** Phase 1의 bounded Protobuf contract와 Phase 2의 인메모리 room/grant store, expiry/cleanup, `PUT|GET|DELETE /v1/rooms/{room_id}` handler, Bearer 인증과 HTTP 상한은 구현·검증됐다. [Phase 2 evidence](./evidence/m1/phase-2.md)는 이 범위만 완료한다. 실행 binary/listener 조립, `/v1/status`, UDP bind/replay/relay, endpoint cleanup, Unity native, 운영·배포와 성능 계약은 아직 **planned**이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
+> **구현 상태 경계:** Phase 1의 bounded Protobuf contract, Phase 2의 인메모리 room/grant store·room-control HTTP, Phase 3의 UDP handshake/bind/rebind/replay/admission/fan-out/endpoint cleanup 및 최소 `internal/server` + `cmd/relay` HTTP+UDP+sweeper 실행점은 구현·검증됐다. [Phase 3 evidence](./evidence/m1/phase-3.md)는 이 범위만 완료한다. Unity native, `/v1/status`, full configuration precedence, structured operations, drain SLA, release packaging·deployment와 성능 계약은 아직 pending이며 현재 동작을 보증하지 않는다. 이후 Phase 검증 결과가 계약 변경을 요구하면 REQUIREMENTS와 ROADMAP을 먼저 승인·갱신한 뒤 본 문서를 함께 개정한다.
 
 ## 1. 기술 목표, 비목표, 결정 요약
 
@@ -33,7 +33,7 @@
 
 ### 1.3 결정 요약
 
-| 결정 | planned 계약 | 이유 |
+| 결정 | v1 계약 | 이유 |
 |---|---|---|
 | 실행 단위 | CGO-free Go 프로세스 1개 | 가장 작은 운영·실패 경계 |
 | 네트워크 | public UDP socket 1개 + private management HTTP listener 1개 | packet/control 부하와 권한 분리 |
@@ -72,7 +72,7 @@ golang.org/x/time v0.15.0
 
 이 둘 외 direct production module은 v1 budget에 포함하지 않는다. `crypto/rand`, `crypto/hmac`, `crypto/sha256`, `crypto/subtle`, `encoding/base64`, `encoding/json`, `flag`, `net`, `net/netip`, `net/http`, `log/slog`, `os/signal`, `sync`, `testing`을 우선한다. stdlib-first는 binary·RSS·CVE·upgrade surface를 작게 하고, 세 HTTP path뿐인 API에 router/RPC/config/DI/logger/JWT/UUID/metrics framework를 소유하지 않기 위해서다. 단, untrusted UDP 경계의 token bucket은 직접 재구현하는 것보다 검증된 `x/time/rate` 한 모듈이 더 작고 안전하다.
 
-## 3. Planned runtime architecture
+## 3. Runtime architecture (Phase 3 core implemented; later consumers planned)
 
 ```mermaid
 flowchart LR
@@ -87,7 +87,9 @@ flowchart LR
     S -. "recipient value snapshot" .-> D
 ```
 
-Phase 3의 최소 composition root는 accepted fixed/default 값과 M1 launch input을 listener bind 전에 검증하고 HTTP, UDP, sweeper를 같은 store에 연결하며 context 취소 시 socket close와 owned goroutine join을 수행한다. Phase 5는 이 조립점을 교체하지 않고 full config precedence, readiness/status, signal/drain과 ordered deadline shutdown을 추가한다. HTTP handler goroutine, UDP receive goroutine, sweeper goroutine은 mutable domain state를 소유하지 않는다.
+Phase 3의 구현된 최소 composition root는 accepted fixed/default 값과 M1 launch input을 listener bind 전에 검증하고 HTTP, UDP, sweeper를 같은 store에 연결하며 context 취소 시 socket close와 owned goroutine join을 수행한다. Phase 5는 이 조립점을 교체하지 않고 full config precedence, readiness/status, signal/drain과 ordered deadline shutdown을 추가한다. HTTP handler goroutine, UDP receive goroutine, sweeper goroutine은 mutable domain state를 소유하지 않는다.
+
+아래 표와 layout에서 `internal/server`, `internal/control`, `internal/relay`, `internal/store`, protocol/generated binding과 `cmd/relay`는 현재 구현 범위다. Unity sample, load client, Dockerfile과 service/runbook path는 각 후속 Phase가 소유한다.
 
 ### 3.1 컴포넌트 책임
 
@@ -102,7 +104,7 @@ Phase 3의 최소 composition root는 accepted fixed/default 값과 M1 launch in
 | Unity `RelayClient` sample | socket/cancellation, client state machine, main-thread delivery | client-local |
 | independent Go load client | named workload, latency/loss/resource evidence | test-run-local |
 
-### 3.2 Boring package layout (planned)
+### 3.2 Boring package layout (implemented core + later owned paths)
 
 ```text
 api/relay/v1/relay.proto
@@ -136,7 +138,7 @@ deploy/relay.service
 
 ## 4. HTTP API contract
 
-Phase 2는 이 절의 room `PUT`/`GET`/`DELETE` handler와 schema, 엄격한 decoding, 인증, redaction, body/header/time bound를 구현·검증했다. Phase 3는 M1 native client 검증에 필요한 최소 HTTP+UDP listener와 sweeper를 단일 binary로 조립한다. VM/Docker bind mode, full config precedence, remote transport, `/v1/status`, readiness/drain과 signal lifecycle은 Phase 5까지 **planned**다.
+Phase 2는 이 절의 room `PUT`/`GET`/`DELETE` handler와 schema, 엄격한 decoding, 인증, redaction, body/header/time bound를 구현·검증했다. Phase 3는 M1 native client 검증에 필요한 최소 HTTP+UDP listener와 sweeper를 단일 binary로 조립·검증했다. VM/Docker bind mode, full config precedence, remote transport, `/v1/status`, readiness/drain과 운영 signal lifecycle은 Phase 5까지 **planned**다.
 
 ### 4.1 공통 규칙
 
@@ -268,7 +270,7 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 | `grant_secret` | base64url string | 32 random bytes, no padding; live grant의 PUT response에서만 노출 |
 | `grants[].state` | enum | `issued`, `bound`, `expired`, `revoked` |
 
-동일 `room_id`의 **open room**에 동일 immutable definition을 재시도하면 state를 새로 만들지 않고 `200`을 반환한다. live grant는 같은 secret/expiry를 반환한다. open room 안의 terminal grant를 재발급하거나 TTL을 연장하지 않으며 해당 항목은 secret을 생략한다. 다른 capacity, expiry, participant/session set 또는 grant expiry는 `409 conflict`다. room 자체가 terminal이거나 `now < tombstone_deadline`인 live tombstone이면 정의가 같아도 `409 conflict`이며 정상적인 새 allocation은 새 `room_id`를 사용한다. tombstone deadline부터 server는 same-ID record를 absent로 취급해 재생성을 막지 않지만 caller는 ID를 의도적으로 재사용하지 않는다. bounded tombstone은 지연된 재시도를 막는 안전창이지 영구 ID registry가 아니다. Phase 2는 participant/session tuple마다 grant 하나를 구현했고, pending challenge 하나와 active binding 하나 제한은 Phase 3 계약이다.
+동일 `room_id`의 **open room**에 동일 immutable definition을 재시도하면 state를 새로 만들지 않고 `200`을 반환한다. live grant는 같은 secret/expiry를 반환한다. open room 안의 terminal grant를 재발급하거나 TTL을 연장하지 않으며 해당 항목은 secret을 생략한다. 다른 capacity, expiry, participant/session set 또는 grant expiry는 `409 conflict`다. room 자체가 terminal이거나 `now < tombstone_deadline`인 live tombstone이면 정의가 같아도 `409 conflict`이며 정상적인 새 allocation은 새 `room_id`를 사용한다. tombstone deadline부터 server는 same-ID record를 absent로 취급해 재생성을 막지 않지만 caller는 ID를 의도적으로 재사용하지 않는다. bounded tombstone은 지연된 재시도를 막는 안전창이지 영구 ID registry가 아니다. Phase 2는 participant/session tuple마다 grant 하나를 구현했고, Phase 3는 grant별 pending challenge 하나, recent completion 하나와 active binding 하나 제한을 구현했다.
 
 ### 4.5 `GET /v1/rooms/{room_id}`
 
@@ -307,14 +309,14 @@ missing/invalid Bearer token은 constant-time 비교 후 room 존재 여부와 �
 | field | type | meaning |
 |---|---|---|
 | room 공통 필드 | PUT response와 동일 | secret 제외 상태 snapshot |
-| `participants[].grant_state` | enum | Phase 2는 `issued`, `expired`, `revoked`; `bound`는 Phase 3 planned |
-| `participants[].binding_state` | enum | Phase 2는 `unbound`, `expired`, `revoked`; `bound`, `rebind_pending`은 Phase 3 planned |
+| `participants[].grant_state` | enum | `issued`, `bound`, `expired`, `revoked`; Phase 3가 live binding projection을 구현·검증 |
+| `participants[].binding_state` | enum | `unbound`, `bound`, `rebind_pending`, `expired`, `revoked`; exact-deadline projection을 포함해 Phase 3 검증 |
 
 `grant_secret`, derived key, challenge nonce, binding ID와 observed endpoint는 절대 포함하지 않는다. room이 access-time expiry, DELETE 또는 empty 판정으로 terminal이 되는 순간부터 physical cleanup 전이라도 GET은 `404`다. tombstone 존재 여부도 노출하지 않는다. 같은 ID의 PUT은 tombstone window 동안 `409`다.
 
 ### 4.6 `DELETE /v1/rooms/{room_id}`
 
-request body는 허용하지 않는다. open room은 즉시 종료하고 Phase 2의 grant를 원자적으로 revoke한다. Phase 3는 같은 room-wide 동작에 challenge와 binding 폐기를 추가해 ROOM-03을 닫는다. 이것이 v1의 유일한 명시적 revoke 동작이며 개별 participant revoke endpoint는 없다. 이미 종료·만료·삭제됐거나 한 번도 없던 ID도 `204 No Content`이며 response body가 없다. previously-known room만 bounded tombstone을 남겨 동일 PUT의 즉시 resurrection을 막는다. 한 번도 없던 ID의 DELETE는 미래의 정상 생성을 막는 tombstone을 만들지 않으며, tombstone은 GET에서 보이지 않는다.
+request body는 허용하지 않는다. open room은 즉시 종료하고 Phase 2의 grant와 Phase 3의 challenge·binding·endpoint·replay·limiter state를 같은 room-wide 동작에서 원자적으로 폐기해 ROOM-03을 닫는다. 이것이 v1의 유일한 명시적 revoke 동작이며 개별 participant revoke endpoint는 없다. 이미 종료·만료·삭제됐거나 한 번도 없던 ID도 `204 No Content`이며 response body가 없다. previously-known room만 bounded tombstone을 남겨 동일 PUT의 즉시 resurrection을 막는다. 한 번도 없던 ID의 DELETE는 미래의 정상 생성을 막는 tombstone을 만들지 않으며, tombstone은 GET에서 보이지 않는다.
 
 ### 4.7 `GET /v1/status` (planned)
 
@@ -420,7 +422,7 @@ decoder는 unknown field, final body 없음, 잘못된 direction, 고정 길이 
 | `ServerData` | server -> clients | v1은 exact relay source만 검증하고 `auth_tag`는 비움 | authoritative sender ID + unchanged payload |
 | `Ping` | client -> server | binding key HMAC + replay window | otherwise-idle binding activity; relay payload 아님 |
 
-### 5.3 HELLO -> CHALLENGE -> AUTH -> BOUND (planned)
+### 5.3 HELLO -> CHALLENGE -> AUTH -> BOUND (implemented)
 
 ```mermaid
 sequenceDiagram
@@ -465,9 +467,9 @@ frame(domain, fields...) =
 
 모든 output은 HMAC-SHA-256 32 bytes이며 비교는 `hmac.Equal`/constant-time이다. raw grant secret은 일반 datagram에 넣지 않는다. `ServerData`의 `auth_tag`는 empty다. client는 HMAC-valid BOUND를 실제로 보낸 exact server `AddrPort`를 binding 수명 동안 pin하고 그 source의 `ServerData`만 받는다. 이는 spoof 가능한 network source check이며 downstream cryptographic integrity나 confidentiality를 뜻하지 않는다.
 
-체크인된 Phase 1 fixture와 Go/C# self-check는 각 transcript 중간 hex, binding key와 tag expected hex를 byte-exact known-answer vector로 고정한다. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)이 replay state를 binding별 highest sequence와 64-bit sliding bitmap으로 확정했다. duplicate와 window보다 오래된 packet은 `replay`로 drop하고, window 안 unseen out-of-order packet은 한 번 수락한다. 이 runtime replay state는 Phase 3에서 구현한다. 이는 security anti-replay일 뿐 gameplay delivery/deduplication 보장이 아니며 network·client 재전송·새 binding 경계의 중복/순서 변경은 여전히 가능하다.
+체크인된 Phase 1 fixture와 Go/C# self-check는 각 transcript 중간 hex, binding key와 tag expected hex를 byte-exact known-answer vector로 고정한다. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md)이 replay state를 binding별 highest sequence와 64-bit sliding bitmap으로 확정했다. duplicate와 window보다 오래된 packet은 `replay`로 drop하고, window 안 unseen out-of-order packet은 한 번 수락한다. 이 runtime replay state는 Phase 3에서 구현·검증됐다. 이는 security anti-replay일 뿐 gameplay delivery/deduplication 보장이 아니며 network·client 재전송·새 binding 경계의 중복/순서 변경은 여전히 가능하다.
 
-### 5.5 Endpoint bind/rebind와 payload (planned)
+### 5.5 Endpoint bind/rebind와 payload (implemented)
 
 - candidate는 서버가 관찰한 canonical exact `AddrPort`에 묶인다. AUTH는 같은 endpoint에서만 성공한다.
 - v1 process는 `relay_network=udp4` 또는 `udp6` 중 하나로 UDP socket 하나만 연다. 이 값은 server bind 설정이지 client filter가 아니다. client는 advertised hostname을 address-family-neutral하게 resolve해 OS가 반환한 A, AAAA 또는 DNS64-synthesized AAAA를 bounded 순차 handshake로 시도하고, HMAC-valid BOUND를 보낸 exact server `AddrPort`를 pin한다. DNS 결과 자체는 인증으로 취급하지 않는다.
@@ -479,7 +481,7 @@ frame(domain, fields...) =
 - ingress invalidation은 final admission linearization 기준이다. DELETE/rebind보다 먼저 admission된 packet의 bounded fan-out writes는 끝날 수 있지만, 그 뒤 old source에서 final admission되는 packet은 모두 거부된다. v1은 in-flight barrier를 만들지 않는다.
 - delivery, order, retry, ACK와 reliable channel은 제공하지 않는다.
 
-### 5.6 Accepted datagram cap과 planned copy model
+### 5.6 Accepted datagram cap과 implemented copy model
 
 **`1200 bytes`는 Protobuf envelope, tag와 payload를 모두 포함한 accepted total UDP datagram cap이고 `900 bytes`는 payload cap이다.** 64-byte room/session/sender ID, 최대 sequence와 900-byte payload fixture에서 ClientData는 `1103`, ServerData는 `1117` bytes로 측정돼 둘 다 cap 안에 있다. [Phase 1 evidence](./evidence/m1/phase-1.md)가 이 결과를 고정한다. target-network IPv4, IPv6/NAT64, Wi-Fi, carrier와 VPN 검증에서 fragmentation이 관찰되면 새 protocol revision과 갱신된 결정으로 두 cap을 함께 낮춘다. server는 `cap + 1` receive buffer로 truncation/oversize를 검출하며 v1은 분할하지 않는다.
 
@@ -489,7 +491,7 @@ frame(domain, fields...) =
 
 ## 6. State machines, expiry, cleanup, limits
 
-### 6.1 Planned state machines
+### 6.1 Implemented Phase 3 state machines
 
 | 객체 | states | 전이와 불변식 |
 |---|---|---|
@@ -502,9 +504,9 @@ fresh room의 issued live grants는 live sessions로 간주하므로 아직 bind
 
 v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client socket close는 UDP에서 관찰 가능한 수명주기 사건이 아니므로 “마지막 session 이탈”은 room의 모든 grant와 binding이 expiry 또는 room DELETE로 terminal이 된 시점을 뜻한다. 만료·폐기된 grant는 같은 room에서 갱신하지 않고 관리 계층이 새 `room_id`로 전체 allocation을 만든다.
 
-### 6.2 Expiry / cleanup contract (room/grant implemented; binding remainder planned)
+### 6.2 Implemented expiry / cleanup contract
 
-- [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)가 아래 수명주기 수치와 상한을 승인했다. Phase 2는 room/grant expiry, DELETE, empty grace와 tombstone cleanup을 [검증](./evidence/m1/phase-2.md)했다. endpoint/binding cleanup을 포함한 ROOM-03 전체 판정은 Phase 3에 남아 있다.
+- [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)가 아래 수명주기 수치와 상한을 승인했다. Phase 2는 room/grant expiry, DELETE, empty grace와 tombstone cleanup을 [검증](./evidence/m1/phase-2.md)했고, Phase 3는 endpoint/binding/replay/limiter cleanup을 결합해 ROOM-03 전체 판정을 [검증](./evidence/m1/phase-3.md)했다.
 - HTTP timestamp는 RFC 3339 UTC로 검증·표시한다. 생성 시 `expires_at - wall_now` duration을 `time.Now()`에서 파생한 monotonic deadline으로 바꾸고 프로세스 내 권한 판정은 그 deadline만 사용해 NTP backward step이 자격을 연장하지 않게 한다.
 - 모든 access path가 deadline을 먼저 검사하므로 권한은 `now >= deadline`에서 끝나고 sweep 지연이 연장하지 않는다. terminal 판정 즉시 외부 GET은 `404`, PUT은 tombstone 동안 `409`다.
 - 논리적으로 terminal이지만 pre-sweep인 room/grant는 `Expire` 또는 그 state를 직접 다루는 operation의 cleanup이 해제할 때까지 `max_rooms`/`max_active_sessions` counter를 계속 소비한다. 이로 인한 보수적 admission 지연은 최대 한 `1s` sweep이고 권한을 연장하지 않는다. 관련 없는 `CreateRoom`은 다른 record를 스캔해 counter를 lazy reclaim하지 않는다.
@@ -518,9 +520,9 @@ v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client so
 - tombstone은 `now < tombstone_deadline`인 동안만 same-ID PUT을 막는다. 생성 후 정확히 `60s`인 deadline에서는 sweeper 전이어도 access path가 stale record를 제거하거나 absent로 취급하며 새 PUT이 같은 ID를 사용할 수 있다. 반복 DELETE와 `Expire`는 tombstone deadline을 갱신하지 않고 physical removal은 최대 한 sweep 뒤이므로 총 상한은 `61s`다.
 - `crypto/rand` 오류는 partial state를 만들지 않는다. HTTP headers 전이면 `500 internal_error`를 반환한 뒤, UDP 경로면 침묵한 뒤 process를 `unhealthy`로 전환해 non-zero 종료한다. random ID 충돌은 overwrite하지 않고 최대 8회 재생성하며 계속 충돌하면 같은 fatal 경로를 사용한다.
 
-### 6.3 Admission / fan-out limits (HTTP implemented; UDP/fan-out planned)
+### 6.3 Implemented admission / fan-out limits
 
-Phase 2는 HTTP body/header, identifier, room/record/capacity/live-grant, room/grant TTL, request-rate와 concurrency hard limit을 body work 또는 mutation 전에 적용했다. Phase 3는 active challenge/binding, total datagram, pre-auth canonical source + 별도 pre-auth process, authenticated session/room/process packet·byte bucket과 room/process fan-out write·byte bucket을 구현해 SAFE-01~03을 닫는다. 정확한 accepted 수치와 charging class는 [ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)에 있다. 이 결정의 acceptance는 구현 완료가 아니며 Phase 3의 열 요구사항은 모두 Pending이다.
+Phase 2는 HTTP body/header, identifier, room/record/capacity/live-grant, room/grant TTL, request-rate와 concurrency hard limit을 body work 또는 mutation 전에 적용했다. Phase 3는 active challenge/binding, total datagram, pre-auth canonical source + 별도 pre-auth process, authenticated session/room/process packet·byte bucket과 room/process fan-out write·byte bucket을 구현·검증해 SAFE-01~03을 닫았다. 정확한 accepted 수치와 charging class는 [ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)에 있고, 경계 결과는 [Phase 3 evidence](./evidence/m1/phase-3.md)에 있다.
 
 pre-auth source key는 port를 제외한 IPv4 `/32` 또는 IPv6 `/64` prefix다. source bucket table은 fixed 4096 entries이고 record는 `now >= last_observed + 60s`에 논리 만료한다. 새 packet access는 sweeper가 아직 돌지 않았어도 만료 record를 먼저 제거하고 new-source path를 적용하며, access가 없으면 다음 1초 sweep 안에 물리 제거한다. `60s-1ns`의 기존 source는 거부되거나 rate-limited인 pre-auth datagram도 `last_observed`를 갱신하되 token을 부분 소비하거나 burst를 reset하지 않는다. capacity가 남은 새 source record는 source+pre-auth-process group이 모두 통과한 뒤에만 생기며, table이 가득 찬 새 key는 source state를 만들지 않고 pre-auth process-global만 가능한 만큼 소비한 뒤 `rate_limited`로 침묵한다. 이 단순 정책의 ceiling은 기존 source가 traffic으로 entry를 계속 유지할 수 있고 table-fill 동안 신규 source admission이 저하된다는 점이며, Phase 7에서 실제 문제가 확인될 때만 fixed-shard admission으로 바꾼다.
 
@@ -563,13 +565,13 @@ strict JSON config file의 일반 값 우선순위는 CLI flag > `RELAY_*` envir
 
 [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md)로 승인된 D-03 compiled default/hard maximum은 max open rooms `256`, total resident room records `4096`, room capacity `16`, active sessions/live grants `4096`, request-required room/grant TTL 각각 최대 `2h`, sweep `1s`, empty grace `5s`, tombstone TTL `60s`다. total record는 open, empty-grace, terminal/pre-sweep와 tombstone을 포함한 모든 non-absent record를 계산한다. room/participant/session ID는 `1..64` ASCII bytes와 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`를 모두 만족하고 arbitrary metadata는 없으며 unknown JSON field는 거부한다. HTTP 상한은 `MaxHeaderBytes=16 KiB`, body `64 KiB`, read-header `2s`, read/write `5s`, idle `30s`, global `20 requests/s` burst `40`, concurrent handlers `32`다. 모든 configurable D-03 default는 동일한 hard maximum이며 향후 설정은 양의 유한한 값으로 상한만 낮출 수 있고 `0`, unlimited 또는 다른 disable 값을 허용하지 않는다. HTTP limiter 또는 semaphore admission 실패는 body를 읽기 전에 `429 rate_limited`다.
 
-D-03 밖의 현재 planned default는 `management_mode=loopback`, management `127.0.0.1:8080`, `relay_network=udp4`, relay `0.0.0.0:30000`, drain grace `250ms`, shutdown `5s`다. Challenge/binding/source/write lifetime과 UDP traffic/fan-out 수치는 [D-04 accepted ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)에 모였다. 수락은 Phase 3 경계 테스트와 구현을 허용하지만 어떤 요구사항 완료도 뜻하지 않는다.
+Phase 3는 [D-04 accepted ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)의 challenge/binding/source/write lifetime과 UDP traffic/fan-out default·hard maximum을 구현·검증했다. 최소 CLI는 management/relay listen, UDP family와 advertised endpoint를 필수 non-secret flag로 받고 secret file을 별도 필수 입력으로 받는다. `management_mode`, full env/config precedence, drain grace와 shutdown deadline을 포함한 나머지 운영 default는 Phase 5에서 확정·구현한다.
 
 `udp4`는 IPv4 listen address와 advertised A record만, `udp6`는 IPv6 listen address와 advertised AAAA record만 허용한다. 한 process에서 dual-stack 두 socket을 열거나 OS별 mapped-address 동작에 의존하지 않는다. Phase 4는 D-05에서 승인된 network mode만 별도 server 실행으로 native 검증하고, 실제 network evidence가 없는 mode는 지원 범위에서 명시적으로 제외한다.
 
 operator token은 CSPRNG 32 bytes를 unpadded base64url로 인코딩한 정확히 43 ASCII characters(`[A-Za-z0-9_-]{43}`)다. file source에서 한 개의 trailing LF와 optional preceding CR만 제거하며 env value는 그대로 사용한다. 두 source가 함께 있거나 secret file 권한이 group/other-readable이면 startup 실패다. rotation은 restart가 필요하고 모든 room/grant state를 잃으므로 runbook이 새 allocation 순서를 포함한다. loopback mode의 non-loopback bind, container mode의 non-wildcard bind, chosen UDP family와 맞지 않는 listen/advertised DNS, missing/invalid secret, impossible TTL ordering 또는 non-positive limit은 socket open 전 safe error와 non-zero exit로 실패한다. Relay는 host publish를 볼 수 없으므로 Docker rehearsal이 `127.0.0.1:hostPort:containerPort/tcp`와 외부 비도달성을 검사한다.
 
-Phase 2는 store `Limits`와 HTTP `Config`에서 control hard maximum validation을 구현했다. Phase 3은 승인된 UDP limit과 최소 `internal/server` + `cmd/relay` HTTP+UDP+sweeper composition을 추가해 M1 단일-binary 증거를 가능하게 한다. Phase 5는 OPS-01~04를 유지하며 full flag/env/file loading, precedence, private status, structured operations, redacted operational error와 drain lifecycle로 확장한다.
+Phase 2는 store `Limits`와 HTTP `Config`에서 control hard maximum validation을 구현했다. Phase 3은 승인된 UDP limit과 최소 `internal/server` + `cmd/relay` HTTP+UDP+sweeper composition, six-flag M1 launch input, strict operator-token file, context/signal cancellation을 구현·검증했다. Phase 5는 OPS-01~04를 유지하며 full flag/env/file loading, precedence, private status, structured operations, redacted operational error와 drain lifecycle로 확장한다.
 
 ### 8.2 Planned observability
 
@@ -586,7 +588,7 @@ Phase 2는 store `Limits`와 HTTP `Config`에서 control hard maximum validation
 4. UDP socket을 닫아 blocking read를 해제하고 sweeper를 중단한 뒤 owned goroutine을 join한다.
 5. application deadline 전에 종료한다. Docker/systemd stop timeout은 이보다 길어야 한다. 재시작 뒤 기존 allocation/grant는 모두 무효다.
 
-startup은 HTTP와 UDP bind가 모두 성공한 뒤에만 owned goroutine을 시작하고 `ready`가 된다. partial bind 실패는 열린 listener를 닫고 non-zero 종료한다. ready 이후 HTTP serve, UDP loop 또는 sweeper가 예기치 않게 종료되거나 CSPRNG fatal이 발생하면 즉시 `unhealthy`, 공통 cancel/close/join 후 non-zero 종료한다. 정상 SIGINT/SIGTERM drain만 zero exit다.
+Phase 3 최소 runtime은 HTTP와 UDP bind가 모두 성공한 뒤에만 owned goroutine을 시작하고, partial bind 실패 시 열린 listener를 닫는다. HTTP serve, UDP loop, sweeper 또는 CSPRNG fatal은 공통 cancel/close/join 뒤 generic non-zero error를 반환하고 caller context 또는 SIGINT/SIGTERM cancellation은 join 뒤 zero exit한다. `ready`/`unhealthy` status 전환, 신규 mutation/bind 차단과 numbered drain deadline 계약은 Phase 5에 남는다.
 
 ### 8.4 VM / Docker deployment (planned)
 
@@ -598,7 +600,7 @@ startup은 HTTP와 UDP bind가 모두 성공한 뒤에만 owned goroutine을 시
 
 ## 9. Verification strategy and evidence
 
-Phase 2는 아래 unit/HTTP/race 전략 중 room/grant store와 room-control HTTP 부분을 [현재 증거](./evidence/m1/phase-2.md)로 닫았다. `/v1/status`, UDP, Unity, load·soak와 failure drill 항목은 각 후속 Phase의 required evidence다.
+Phase 2는 아래 unit/HTTP/race 전략 중 room/grant store와 room-control HTTP 부분을 [Phase 2 evidence](./evidence/m1/phase-2.md)로 닫았다. Phase 3은 UDP/store/server/CLI의 unit·loopback·race·fuzz·vet·build·static gate를 [Phase 3 evidence](./evidence/m1/phase-3.md)로 닫았다. `/v1/status`, Unity, host load·soak와 failure drill 항목은 각 후속 Phase의 required evidence다.
 
 | layer | required evidence |
 |---|---|
@@ -616,7 +618,7 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 
 ## 10. Requirement -> component -> Phase traceability
 
-아래는 승인된 v1 requirement **29/29**를 정확히 한 Phase에 매핑한다. PROT-01/PROT-02와 ROOM-01/ROOM-02/SESS-01, 총 5개는 완료됐고 나머지 24개는 `Pending`이다.
+아래는 승인된 v1 requirement **29/29**를 정확히 한 Phase에 매핑한다. Phase 1~3의 PROT-01/PROT-02, ROOM-01~03, SESS-01~04, RELY-01~03, SAFE-01~03, 총 15개는 완료됐고 나머지 14개는 `Pending`이다.
 
 | Requirement | 책임 컴포넌트 / 검증 | Phase | Status |
 |---|---|---|---|
@@ -625,16 +627,16 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 | ROOM-01 | management HTTP + store | Phase 2 | Complete |
 | ROOM-02 | management HTTP auth/redaction + store | Phase 2 | Complete |
 | SESS-01 | store + `crypto/rand` issuance + room DELETE revocation | Phase 2 | Complete |
-| ROOM-03 | store + expiry sweeper + binding cleanup | Phase 3 | Pending |
-| SESS-02 | UDP adapter + challenge/binding store | Phase 3 | Pending |
-| SESS-03 | protocol HMAC/replay + UDP authorization | Phase 3 | Pending |
-| SESS-04 | UDP pre-auth admission + safe logging | Phase 3 | Pending |
-| RELY-01 | UDP fan-out + store recipient snapshot | Phase 3 | Pending |
-| RELY-02 | UDP best-effort semantics + isolation tests | Phase 3 | Pending |
-| RELY-03 | queue-free deadline-bounded UDP writes + bounded counters | Phase 3 | Pending |
-| SAFE-01 | HTTP/codec/store hard limits | Phase 3 | Pending |
-| SAFE-02 | bounded source table + layered rate/fan-out admission | Phase 3 | Pending |
-| SAFE-03 | decoder/drop taxonomy + negative tests | Phase 3 | Pending |
+| ROOM-03 | store + expiry sweeper + binding cleanup | Phase 3 | Complete |
+| SESS-02 | UDP adapter + challenge/binding store | Phase 3 | Complete |
+| SESS-03 | protocol HMAC/replay + UDP authorization | Phase 3 | Complete |
+| SESS-04 | UDP pre-auth admission + safe logging | Phase 3 | Complete |
+| RELY-01 | UDP fan-out + store recipient snapshot | Phase 3 | Complete |
+| RELY-02 | UDP best-effort semantics + isolation tests | Phase 3 | Complete |
+| RELY-03 | queue-free deadline-bounded UDP writes + bounded counters | Phase 3 | Complete |
+| SAFE-01 | HTTP/codec/store hard limits | Phase 3 | Complete |
+| SAFE-02 | bounded source table + layered rate/fan-out admission | Phase 3 | Complete |
+| SAFE-03 | decoder/drop taxonomy + negative tests | Phase 3 | Complete |
 | UNITY-01 | Unity RelayClient sample | Phase 4 | Pending |
 | UNITY-02 | Unity lifecycle/rebind/reallocation flow | Phase 4 | Pending |
 | UNITY-03 | address-family-neutral socket + target matrix | Phase 4 | Pending |
@@ -661,7 +663,7 @@ Phase 7 전에는 RAM 20 MB, CPU 1–2%, startup 또는 capacity 수치를 보�
 | transport threat acceptance | **Accepted:** off-path ingress spoof/replay와 exact-source-only downstream baseline; confidentiality, 완전한 on-path/downstream integrity, traffic-analysis protection 제외; replay window 64-bit. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Product + Protocol & Security owners |
 | wire caps | **Accepted:** revision 1, datagram 1200, payload 900, ID 64 bytes; measured ClientData/ServerData 1103/1117 bytes. [ADR 0001](./decisions/0001-m1-wire-and-threat-boundary.md) | Phase 1 | Protocol & Network validation owner |
 | control/lifecycle policy | **Accepted:** compiled defaults = hard maxima; open rooms/records/capacity/sessions `256`/`4096`/`16`/`4096`, request-required room/grant TTL max `2h`, sweep/empty/tombstone `1s`/`5s`/`60s`, fixed ID·HTTP bounds and cleanup 상한. [ADR 0002](./decisions/0002-m1-control-lifecycle-policy.md) | Phase 2 | Product + Room/Session kernel owners |
-| packet policy defaults | **[D-04 accepted]** 2026-08-10 — replay window는 D-01에서 64-bit로 확정. [ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)의 `D04-M1-NORMAL`, process-global pre-auth를 포함한 일곱 limit row, lifecycle, three atomic groups/no-refund/replay consumption, maximum-capacity/maximum-payload non-guarantee를 승인했다. Phase 3 구현과 열 요구사항은 모두 Pending이다. | Phase 3 | Product + Security + Operations owners |
+| packet policy defaults | **[D-04 accepted]** 2026-08-10 — replay window는 D-01에서 64-bit로 확정. [ADR 0003](./decisions/0003-m1-udp-admission-and-fanout-policy.md)의 `D04-M1-NORMAL`, process-global pre-auth를 포함한 일곱 limit row, lifecycle, three atomic groups/no-refund/replay consumption, maximum-capacity/maximum-payload non-guarantee를 승인했고 [Phase 3 evidence](./evidence/m1/phase-3.md)가 구현을 검증했다. | Phase 3 | Product + Security + Operations owners |
 | Unity support matrix | [Phase 4 계획](./superpowers/plans/2026-08-09-phase-4-unity-native-integration.md)은 Unity `6000.3.20f1`, Mac ARM64 Mono, physical Android ARM64 IL2CPP, IPv4 Wi-Fi를 제안한다. D-05 승인·설치·실기기 증거 전에는 미지원이다. | Phase 4 | Product + Unity integration owners |
 | health/drain timing | status transition, planned drain 250ms와 shutdown 5s를 승인하거나 더 낮은 bounded 값으로 조정 | Phase 5 | Operations + Lifecycle owners |
 | deployment profile | Linux host/GOARCH, Docker host-loopback publish와 원격 TLS proxy/SSH 방식, resource limits | Phase 6 | Product + Operations owners |

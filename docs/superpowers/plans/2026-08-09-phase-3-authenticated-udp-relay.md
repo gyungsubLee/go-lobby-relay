@@ -8,7 +8,7 @@
 
 **Requirements owned:** ROOM-03, SESS-02, SESS-03, SESS-04, RELY-01, RELY-02, RELY-03, SAFE-01, SAFE-02, SAFE-03.
 
-**Status:** Planned — [ADR 0003](../../decisions/0003-m1-udp-admission-and-fanout-policy.md) is accepted as D-04 on 2026-08-10; no Phase 3 boundary test or implementation is complete, and all ten Phase 3 requirements remain pending.
+**Status:** Complete — clean candidate `a6dad3bd2383a85a58c056e8fb2cf48845c1869a` passed the Phase 3 protocol, focused, race, fuzz, vet, build, static, loopback, lifecycle, and data-handling gates on 2026-08-10. [Phase 3 evidence](../../evidence/m1/phase-3.md) completes the ten requirements owned by this plan; Unity, Milestone 1, and Phases 4–7 remain incomplete.
 
 **Milestone boundary correction:** Phase 3 owns the minimum runnable `internal/server` + `cmd/relay` needed by M1: fixed/default listeners and limits, required operator secret, HTTP + UDP + sweeper composition, context cancellation, and clean joining. Phase 5 still owns OPS-01~04: full flag/env/file precedence, private status, structured operational logs, drain semantics, signal deadlines, and the production runbook.
 
@@ -172,6 +172,8 @@ git commit -m "docs: accept M1 UDP admission policy"
 
 ### Task 2: Implement replay, challenge, and authenticated bind test-first
 
+**Status:** Complete — `f285e4bd8295bbf92ceaa8e37707babb8e8688e3`, with review fixes `bcb94f2b565262c78fbba41e8a696e1c39af4e89` and `c5449a36fd96d853bafd734b4da0a4a694ea6c9b`.
+
 **Files:**
 
 - Create: `internal/store/relay.go`
@@ -179,23 +181,23 @@ git commit -m "docs: accept M1 UDP admission policy"
 - Modify: `internal/store/store.go`
 - Modify: `internal/store/store_test.go`
 
-- [ ] **Step 1: Write the 64-bit replay RED matrix**
+- [x] **Step 1: Write the 64-bit replay RED matrix**
 
 Cover first sequence, increasing sequence, duplicate, `highest-63`, unseen out-of-order acceptance once, `highest-64` rejection, large jumps, and `math.MaxUint64` without overflow. The replay object stays private in `store`; no new package or public abstraction.
 
-- [ ] **Step 2: Write HELLO/CHALLENGE tests**
+- [x] **Step 2: Write HELLO/CHALLENGE tests**
 
 Cover live/expired/unknown grant, wrong room/session, exact endpoint, one pending challenge per session, same nonce+endpoint idempotent CHALLENGE, different nonce while pending silent rejection, exact `3s` deadline, one recent-completed record, source/global pre-auth boundary, table `4096`/full behavior, IPv4 `/32` and IPv6 `/64`, idle removal, and no response data containing grant secret. After room DELETE retires the credential indexes, prove that stale HELLO is `unknown_grant` rather than retaining a revoked-grant lookup. Prove that rejected and rate-limited pre-auth datagrams refresh an existing source's `last_observed` without partial token consumption or a burst reset, while a table-full new source creates no record. Test access before the sweeper at `last_observed+60s-1ns`, exact `+60s`, and `+60s+1ns`: the first remains and refreshes the existing record, while exact/after lazily remove it before following the new-source path. After a successful AUTH, a fresh-nonce HELLO may start a new rebind immediately while the old recent-completed record remains available only for its duplicate AUTH; a newer completion replaces it.
 
 CSPRNG fixtures cover exact 16-byte candidate ID, 32-byte server nonce, collision success on draw 9, collision exhaustion, and short/error reads with no partial state. Reuse the existing scripted reader pattern.
 
-- [ ] **Step 3: Write AUTH/BOUND and rebind tests**
+- [x] **Step 3: Write AUTH/BOUND and rebind tests**
 
 Cover exact endpoint, AUTH HMAC, one-use candidate, exact deadline, duplicate AUTH returning the same current BOUND, binding ID collision/failure rollback, derived key and BOUND tag, binding deadline `min(now+60s, grant, room)`, and one binding/session.
 
 For rebind, assert the old binding remains usable while a new challenge is pending and becomes unusable at the same linearization point that the new binding becomes current. Binding ID/key/endpoint/replay state rotate; the session limiter does not.
 
-- [ ] **Step 4: Run RED**
+- [x] **Step 4: Run RED**
 
 ```bash
 GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" \
@@ -204,13 +206,13 @@ GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" \
 
 Expected: compile failure on missing relay-store API.
 
-- [ ] **Step 5: Implement the minimum state under one lock**
+- [x] **Step 5: Implement the minimum state under one lock**
 
 Add reverse indexes for grant, candidate, binding, and current endpoint only where lookup requires them. One grant record owns at most one pending challenge, one recent completion, and one current binding. Generate all random material into temporary values and commit indexes together. Keep network I/O and Protobuf marshal outside the lock.
 
 Do not create timers, goroutines, channels, or a second state owner.
 
-- [ ] **Step 6: Run GREEN, race, invariants, and commit**
+- [x] **Step 6: Run GREEN, race, invariants, and commit**
 
 ```bash
 GOCACHE="$PWD/.cache/go-build" GOMODCACHE="$PWD/.cache/go-mod" \
@@ -232,6 +234,8 @@ git commit -m "feat(store): bind authenticated UDP sessions"
 
 ### Task 3: Enforce atomic ingress, fan-out, and terminal cleanup
 
+**Status:** Complete — `72e82750b90f3c63dd1681e2e2ae36ee238ab6c5`, with proof coverage `806f85105799079b1af3c2ccf8a5224596e4548c`.
+
 **Files:**
 
 - Modify: `internal/store/relay.go`
@@ -239,7 +243,7 @@ git commit -m "feat(store): bind authenticated UDP sessions"
 - Modify: `internal/store/store.go`
 - Modify: `internal/store/store_test.go`
 
-- [ ] **Step 1: Write exact D-04 boundary tests**
+- [x] **Step 1: Write exact D-04 boundary tests**
 
 At one monotonic timestamp, test equality and one-over for every packet/write burst and byte burst. Separately advance the deterministic clock to `refill-1ns`, exact refill, and `refill+1ns` for every rate so tests prove time-based refill rather than burst only. Constructor tests reject zero, negative, infinity, NaN, and above-hard-maximum values. Runtime charges observed input bytes (`1201` for over-cap/truncated) and `outputBytes * plannedRecipientCount`, never the profile's `512` placeholder.
 
@@ -259,15 +263,15 @@ Prove separately atomic groups:
 
 Use the installed `golang.org/x/time/rate`. Under `Store.mu`, preflight all members with one time value before calling `AllowN`; do not add a custom limiter dependency or sequential partial consumption.
 
-- [ ] **Step 2: Write recipient and isolation tests**
+- [x] **Step 2: Write recipient and isolation tests**
 
 Cover sender exclusion; live and bound same-room recipients only; authoritative participant identity; empty recipient snapshot; wrong room/session/binding/source; expired/terminal/unbound recipients; a pre-delete admitted value rejected as `not_bound` after EndRoom; two rooms under concurrent traffic; one session/room hitting its limit while another still passes; and session limiter continuity after rebind.
 
-- [ ] **Step 3: Extend expiry/DELETE and churn tests**
+- [x] **Step 3: Extend expiry/DELETE and churn tests**
 
 At room, grant, challenge, recent-completed, and binding exact deadlines, assert immediate authority denial. `EndRoom` and `Expire` must zero and remove candidate nonce, derived key, binding ID, endpoint, replay, and limiter/index state before tombstoning. After EndRoom, assert stale HELLO=`unknown_grant`, AUTH=`auth_failed`, ClientData/Ping=`not_bound`, and pre-delete admitted fan-out=`not_bound`, with each applicable pre-auth/drop charged exactly once and no response or state resurrection. Extend the existing invariant checker and `1,000` lifecycle cycles so all new indexes/counters return to baseline.
 
-- [ ] **Step 4: Implement, race, and commit**
+- [x] **Step 4: Implement, race, and commit**
 
 ```bash
 .tools/go/bin/go test ./internal/store -count=1
@@ -288,12 +292,14 @@ git commit -m "feat(store): admit bounded relay traffic"
 
 ### Task 4: Build the queue-free UDP adapter
 
+**Status:** Complete — `8d249db457b04fd7615caf074f89405dcb9dd412`.
+
 **Files:**
 
 - Create: `internal/relay/udp.go`
 - Create: `internal/relay/udp_test.go`
 
-- [ ] **Step 1: Write fake-socket RED tests**
+- [x] **Step 1: Write fake-socket RED tests**
 
 Cover every client packet kind and fixed drop reason. Assert:
 
@@ -309,7 +315,7 @@ Cover every client packet kind and fixed drop reason. Assert:
 - `udp_dropped == sum(drop_reasons)` and post-admission write errors are not input drops.
 - a unique gameplay-payload and derived-key/grant sentinel produces no runtime diagnostic containing its raw, base64url, or hex form; `internal/relay` contains no direct `fmt.Print*`, `log.*`, or `slog.*` packet logging.
 
-- [ ] **Step 2: Run RED and implement one receive loop**
+- [x] **Step 2: Run RED and implement one receive loop**
 
 ```bash
 .tools/go/bin/go test ./internal/relay -count=1
@@ -319,15 +325,15 @@ Expected: package/API missing.
 
 Decode once with `protocol.DecodeClient`. Use existing auth/tag helpers and `protocol.EncodeServer`; do not edit `.proto` or generated files. Copy input payload only where Protobuf lifetime requires it, marshal output once, then reuse it.
 
-- [ ] **Step 3: Add real loopback tests**
+- [x] **Step 3: Add real loopback tests**
 
 With two or more raw Go test clients and the concrete deterministic store, prove HELLO→CHALLENGE→AUTH→BOUND, byte-preserving same-room exchange, no echo to sender, cross-room isolation, wrong-source rejection, replay/out-of-order behavior, rebind old-source invalidation, DELETE, expiry, and socket cancellation. Join every goroutine started by the test itself; do not add a fake store interface.
 
-- [ ] **Step 4: Add bounded fuzzing**
+- [x] **Step 4: Add bounded fuzzing**
 
 Fuzz arbitrary `0..1201+` datagrams through the decode/dispatch boundary with the concrete bounded deterministic store and a fake socket. Assert no panic and no state/output beyond fixed caps. Keep the existing protocol fuzz target intact.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 .tools/go/bin/go test ./internal/relay -count=1
@@ -349,6 +355,8 @@ git commit -m "feat(relay): route authenticated UDP packets"
 
 ### Task 5: Compose the minimum single Go binary
 
+**Status:** Complete — `ca7df8a3f36aa6b06574fe7de50cbfd41a1ef617`, with fatal-shutdown and token-file review fixes `1d0cbe4ec6b03ff19c178208d6bcdd09031b5650`.
+
 **Files:**
 
 - Modify: `internal/control/http.go`
@@ -359,11 +367,11 @@ git commit -m "feat(relay): route authenticated UDP packets"
 - Create: `cmd/relay/main_test.go`
 - Modify: `Makefile`
 
-- [ ] **Step 1: Write control-token parser RED tests**
+- [x] **Step 1: Write control-token parser RED tests**
 
 Extract the existing exact 43-character, strict unpadded-base64url parser so both HTTP auth and startup use one implementation. Retain constant-time HTTP comparison. Test invalid length/alphabet/trailing bits/all-zero value. Do not add JWT or general secret/config packages.
 
-- [ ] **Step 2: Write server composition RED tests**
+- [x] **Step 2: Write server composition RED tests**
 
 Use real loopback TCP and UDP listeners. Prove:
 
@@ -378,7 +386,7 @@ Use real loopback TCP and UDP listeners. Prove:
 
 Construct with `127.0.0.1:0` and read `ManagementAddr`/`RelayAddr`; do not reserve-then-rebind ports or parse logs for addresses.
 
-- [ ] **Step 3: Implement the narrow server and CLI**
+- [x] **Step 3: Implement the narrow server and CLI**
 
 Use standard library `net`, `net/http`, `context`, and `os/signal`. Implement the exact flag/token-file contract above. Reject a missing, non-regular, group/other-readable, invalid, or ambiguous token file before opening sockets. The full configuration precedence and graceful drain contract remain Phase 5.
 
@@ -386,7 +394,7 @@ Keep a small `run(ctx, args)` seam in package `main` and test it in `cmd/relay/m
 
 Add `make relay-build` that writes an ignored local binary to `out/relay` without claiming a static/reproducible release artifact.
 
-- [ ] **Step 4: Run binary and end-to-end gates**
+- [x] **Step 4: Run binary and end-to-end gates**
 
 ```bash
 make relay-build
@@ -399,7 +407,7 @@ make go-test
 git diff --check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/control/http.go internal/control/http_test.go \
@@ -413,6 +421,8 @@ git commit -m "feat(server): run the single-process relay MVP"
 
 ### Task 6: Prove and close Phase 3
 
+**Status:** Complete — clean source candidate `a6dad3bd2383a85a58c056e8fb2cf48845c1869a` verified; evidence/status are finalized by the `docs: verify authenticated UDP relay` commit containing this plan, whose SHA is supplied by Git history.
+
 **Files:**
 
 - Create: `docs/evidence/m1/phase-3.md`
@@ -423,7 +433,7 @@ git commit -m "feat(server): run the single-process relay MVP"
 - Modify: `.planning/STATE.md`
 - Modify: this plan
 
-- [ ] **Step 1: Run the clean candidate gate**
+- [x] **Step 1: Run the clean candidate gate**
 
 ```bash
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
@@ -437,22 +447,22 @@ make go-test
 .tools/go/bin/go test ./internal/relay -run='^$' -fuzz=FuzzDispatch -fuzztime=10s
 .tools/go/bin/go vet ./...
 make relay-build
-if rg -n '\b(fmt\.(Print|Fprint)|log\.|slog\.)' internal/control internal/store internal/relay; then exit 1; fi
+if rg -n '\b(fmt\.(Print|Fprint)|log\.|slog\.)' internal/control internal/store internal/relay -g '*.go' -g '!*_test.go'; then exit 1; fi
 git diff --check
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
 Expected: clean before/after, all commands exit `0`, and `out/relay` is ignored rather than staged.
 
-- [ ] **Step 2: Record exact secret-free evidence**
+- [x] **Step 2: Record exact secret-free evidence**
 
 Evidence names source SHA, accepted ADRs, Go version, exact commands/exits, replay matrix, handshake/rebind/cleanup deadlines, the post-zeroing retired-credential mapping (`unknown_grant`/`auth_failed`/`not_bound`) with reserved `revoked` coverage, all D-04 equality/one-over results, source table cap/churn, same/cross-room tests, real loopback result, write-error/no-retry result, race/fuzz/vet result, no-runtime-secret/payload-log checks, and single-binary composition. It carries forward Phase 2's management-handler result and adds the static control/store/relay no-logging gate plus captured CLI token-output check. It contains no operator token, grant, key, nonce, payload, ID, or endpoint value.
 
-- [ ] **Step 3: Update only owned status**
+- [x] **Step 3: Update only owned status**
 
 After every gate passes, mark exactly ROOM-03, SESS-02..04, RELY-01..03, SAFE-01..03 and Phase 3 complete. Move current focus to Phase 4 and D-05. Do not mark UNITY-01..03 or M1 complete.
 
-- [ ] **Step 4: Commit evidence/status**
+- [x] **Step 4: Commit evidence/status**
 
 ```bash
 git add docs/evidence/m1/phase-3.md docs/PRD.md docs/TRD.md \

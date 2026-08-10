@@ -15,7 +15,7 @@
 
 - [x] **Phase 1: Wire Contract and Threat Boundary** - Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성 기준을 고정한다.
 - [x] **Phase 2: In-Memory Room and Session Kernel** - 인증된 room API와 grant·expiry·cleanup 수명주기를 단일 프로세스 메모리에서 완성한다.
-- [ ] **Phase 3: Authenticated UDP Relay** - endpoint 인증, replay 방지, same-room fan-out과 모든 admission limit 및 최소 `internal/server` + `cmd/relay` 실행점을 갖춘 UDP Relay를 완성한다.
+- [x] **Phase 3: Authenticated UDP Relay** - endpoint 인증, replay 방지, same-room fan-out과 모든 admission limit 및 최소 `internal/server` + `cmd/relay` 실행점을 갖춘 UDP Relay를 완성한다.
 - [ ] **Phase 4: Unity Native Integration** - 실제 Unity 네이티브 클라이언트가 입장, 교환, 중단과 네트워크 변경 복구를 증명한다.
 
 ### Milestone 2 — Single-Host Initial Operation
@@ -61,14 +61,15 @@
 **Depends on:** Phase 2
 **Requirements:** ROOM-03, SESS-02, SESS-03, SESS-04, RELY-01, RELY-02, RELY-03, SAFE-01, SAFE-02, SAFE-03
 **Success Criteria** (what must be TRUE):
-  1. 참가자는 fresh authenticated proof로 관찰된 UDP address·port를 session에 bind하고, 성공한 명시적 rebind 직후 이전 endpoint에서는 더 이상 송신할 수 없다.
-  2. 서버는 replay 검사를 통과한 bound endpoint의 packet만 수락하고 일반 datagram에 재사용 가능한 grant를 노출하지 않으며, 인증 전 입력에는 침묵하거나 요청보다 작은 응답만 보낸다.
-  3. 유효한 opaque payload는 byte-preserving 상태로 발신자를 제외한 같은 room의 활성·bound 참가자에게만 전달되고, delivery·ordering·deduplication·retry는 보장되지 않는다.
-  4. HTTP·room·session·TTL·metadata·datagram hard limit과 source·session·room·global packet·byte·fan-out budget이 mutation과 fan-out 전에 적용되어 느린 수신자나 한 발신자가 loop, queue, goroutine 또는 memory를 무한히 늘리지 못한다.
-  5. malformed, oversized, unsupported-version, replayed, expired, revoked, wrong-room 및 rate-limited 입력은 panic이나 cross-room mutation 없이 폐기되고 bounded reason으로 집계되며 grant와 game payload는 기록되지 않는다. 마지막 live grant/binding 뒤 endpoint를 포함한 모든 room 자원이 deadline 안에 정리된다.
-  6. 최소 `internal/server` + `cmd/relay` 바이너리는 같은 인메모리 store에 management HTTP, UDP loop와 sweeper를 연결하고 context 취소 시 owned listener와 goroutine을 닫고 join하여 Phase 4의 단일-process native proof를 실행할 수 있다.
-**Plans:** 0/1 — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md)
-**Decision:** **[D-04 accepted]** [ADR 0003 — M1 UDP admission and fan-out policy](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md) was explicitly approved on 2026-08-10. This clears the D-04 gate for subsequent Phase 3 implementation; all ten Phase 3 requirements and Phase 3 remain pending.
+  1. [x] 참가자는 fresh authenticated proof로 관찰된 UDP address·port를 session에 bind하고, 성공한 명시적 rebind 직후 이전 endpoint에서는 더 이상 송신할 수 없다.
+  2. [x] 서버는 replay 검사를 통과한 bound endpoint의 packet만 수락하고 일반 datagram에 재사용 가능한 grant를 노출하지 않으며, 인증 전 입력에는 침묵하거나 요청보다 작은 응답만 보낸다.
+  3. [x] 유효한 opaque payload는 byte-preserving 상태로 발신자를 제외한 같은 room의 활성·bound 참가자에게만 전달되고, delivery·ordering·deduplication·retry는 보장되지 않는다.
+  4. [x] HTTP·room·session·TTL·metadata·datagram hard limit과 source·session·room·global packet·byte·fan-out budget이 mutation과 fan-out 전에 적용되어 느린 수신자나 한 발신자가 loop, queue, goroutine 또는 memory를 무한히 늘리지 못한다.
+  5. [x] malformed, oversized, unsupported-version, replayed, expired, revoked, wrong-room 및 rate-limited 입력은 panic이나 cross-room mutation 없이 폐기되고 bounded reason으로 집계되며 grant와 game payload는 기록되지 않는다. 마지막 live grant/binding 뒤 endpoint를 포함한 모든 room 자원이 deadline 안에 정리된다.
+  6. [x] 최소 `internal/server` + `cmd/relay` 바이너리는 같은 인메모리 store에 management HTTP, UDP loop와 sweeper를 연결하고 context 취소 시 owned listener와 goroutine을 닫고 join하여 Phase 4의 단일-process native proof를 실행할 수 있다.
+**Plans:** 1/1 complete — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md)
+**Decision:** **[D-04 accepted]** [ADR 0003 — M1 UDP admission and fan-out policy](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md) was explicitly approved on 2026-08-10.
+**Evidence:** [Phase 3 verification](../docs/evidence/m1/phase-3.md)
 
 ### Phase 4: Unity Native Integration
 **Goal:** Unity PC·모바일 네이티브 클라이언트가 단일 Go Relay 프로세스에서 실제 연결 수명주기와 packet 교환을 완료할 수 있다.
@@ -80,7 +81,7 @@
   2. sample은 pause/resume와 source-port 변경 뒤 live grant로 authenticated rebind하고, grant expiry 뒤에는 새 `room_id` allocation의 fresh grant로 통신을 복구한다.
   3. sample은 hostname과 address-family-agnostic socket API를 사용하고, 승인된 PC target 1개와 Android/iOS 중 mobile target 1개의 Mono/IL2CPP build 결과 및 승인된 IPv4·IPv6/NAT64 적용 범위를 보여 준다.
 **Plans:** 0/1 — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-4-unity-native-integration.md)
-**Decision gate:** D-05 exact Unity/device/network matrix remains unapproved
+**Decision gate:** D-05 exact Unity/device/network matrix remains unapproved; Phase 3 is complete, so D-05 is the explicit blocker.
 
 #### Milestone 1 Completion Gate
 
@@ -154,8 +155,8 @@ Milestone 2는 Phase 5-7의 success criteria가 모두 충족되고 다음 운�
 |-------|-----------|----------------|--------|-----------|
 | 1. Wire Contract and Threat Boundary | Milestone 1 | 1/1 | Complete | 2026-08-09 |
 | 2. In-Memory Room and Session Kernel | Milestone 1 | 1/1 | Complete | 2026-08-09 |
-| 3. Authenticated UDP Relay | Milestone 1 | 0/1 | Planned — D-04 accepted; implementation pending | - |
-| 4. Unity Native Integration | Milestone 1 | 0/1 | Blocked on Phase 3 and D-05 | - |
+| 3. Authenticated UDP Relay | Milestone 1 | 1/1 | Complete | 2026-08-10 |
+| 4. Unity Native Integration | Milestone 1 | 0/1 | Blocked on unapproved D-05 | - |
 | 5. Single-Host Runtime Operations | Milestone 2 | 0/TBD | Not started | - |
 | 6. Static Packaging and Host Deployment | Milestone 2 | 0/TBD | Not started | - |
 | 7. Failure Drills and Performance Evidence | Milestone 2 | 0/TBD | Not started | - |

@@ -1,11 +1,11 @@
 # Requirements: Go Lightweight Game Relay & Session Server
 
 **Defined:** 2026-08-08
-**Last updated:** 2026-08-09 — Phase 2 verified
+**Last updated:** 2026-08-10 — Phase 3 verified
 
 **Core Value:** 인증된 룸 참가자 사이의 게임 패킷을 낮은 지연과 작은 서버 자원으로 안정적으로 중계한다.
 
-Phase 2의 ROOM-01, ROOM-02, SESS-01 완료 근거는 [ADR 0002](../docs/decisions/0002-m1-control-lifecycle-policy.md)와 [검증 증거](../docs/evidence/m1/phase-2.md)다. ROOM-03, SAFE-01과 모든 Phase 3 요구사항은 pending이다.
+Phase 2의 ROOM-01, ROOM-02, SESS-01 완료 근거는 [ADR 0002](../docs/decisions/0002-m1-control-lifecycle-policy.md)와 [검증 증거](../docs/evidence/m1/phase-2.md)다. Phase 3의 ROOM-03, SESS-02~04, RELY-01~03, SAFE-01~03 완료 근거는 [ADR 0003](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md)과 [검증 증거](../docs/evidence/m1/phase-3.md)다. 총 15개가 Complete이고 14개가 Pending이다.
 
 ## v1 Requirements
 
@@ -20,23 +20,23 @@ Phase 2의 ROOM-01, ROOM-02, SESS-01 완료 근거는 [ADR 0002](../docs/decisio
 
 - [x] **ROOM-01**: 인증된 관리 호출자는 caller-supplied room ID, 수용 인원, 참가자와 만료 시간을 사용해 룸을 멱등하게 생성하고 Relay endpoint와 참가자별 grant를 받을 수 있다.
 - [x] **ROOM-02**: 인증된 관리 호출자는 룸의 비밀을 노출하지 않는 상태를 조회하고 룸을 멱등하게 종료할 수 있으며, 인증되지 않은 호출자는 룸을 열거하거나 변경할 수 없다.
-- [ ] **ROOM-03**: 서버는 종료·만료·마지막 세션 이탈 후 룸, grant, endpoint와 관련 자원을 정해진 시간 안에 제거한다.
+- [x] **ROOM-03**: 서버는 종료·만료·마지막 세션 이탈 후 룸, grant, endpoint와 관련 자원을 정해진 시간 안에 제거한다.
 
 #### Session Security
 
 - [x] **SESS-01**: 각 참가자는 최소 128-bit CSPRNG 엔트로피를 가진 룸·세션 범위의 만료 및 폐기 가능한 grant를 독립적으로 받는다.
-- [ ] **SESS-02**: 클라이언트는 fresh authenticated proof로 관찰된 UDP 주소와 포트를 세션에 바인딩하며, endpoint 변경은 이전 endpoint를 무효화하는 명시적 재인증으로만 수행한다.
-- [ ] **SESS-03**: 서버는 재사용 가능한 grant를 일반 데이터그램에 노출하지 않고 패킷 인증과 replay 방지를 통과한 bound endpoint의 데이터만 Relay한다.
-- [ ] **SESS-04**: 인증 전 UDP 입력은 응답하지 않거나 요청보다 작은 응답만 생성하며, 관리 자격 증명과 game payload를 로그에 남기지 않는다.
+- [x] **SESS-02**: 클라이언트는 fresh authenticated proof로 관찰된 UDP 주소와 포트를 세션에 바인딩하며, endpoint 변경은 이전 endpoint를 무효화하는 명시적 재인증으로만 수행한다.
+- [x] **SESS-03**: 서버는 재사용 가능한 grant를 일반 데이터그램에 노출하지 않고 패킷 인증과 replay 방지를 통과한 bound endpoint의 데이터만 Relay한다.
+- [x] **SESS-04**: 인증 전 UDP 입력은 응답하지 않거나 요청보다 작은 응답만 생성하며, 관리 자격 증명과 game payload를 로그에 남기지 않는다.
 
 #### Packet Relay and Safety
 
-- [ ] **RELY-01**: 유효한 참가자의 opaque payload는 발신자를 제외한 동일 룸의 활성·bound 참가자에게만 byte-preserving 방식으로 전달된다.
-- [ ] **RELY-02**: Relay는 gameplay 데이터의 전달, 순서, 중복 제거 또는 재전송을 보장하지 않으며 다른 룸, 만료 세션 또는 폐기 세션으로 전달하지 않는다.
-- [ ] **RELY-03**: 실패하거나 느린 수신자는 global receive loop를 무기한 막거나 queue, goroutine 또는 메모리를 무한히 증가시키지 않으며 해당 실패는 bounded reason으로 집계된다.
-- [ ] **SAFE-01**: 서버는 HTTP body, 룸 수, 룸 정원, 활성 세션, grant TTL, metadata와 UDP 데이터그램 크기의 명시적 hard limit을 mutation 또는 fan-out 전에 적용한다.
-- [ ] **SAFE-02**: 서버는 인증 전 source, 인증된 세션, 룸과 프로세스 전체에 packet·byte·fan-out budget을 적용하여 한 발신자가 다른 룸을 고갈시키지 못하게 한다.
-- [ ] **SAFE-03**: malformed, oversized, unsupported-version, expired, wrong-room, rate-limited 및 revocation-caused stale 입력은 panic이나 cross-room state mutation 없이 폐기되고 원인별로 집계된다. Room DELETE가 credential index와 secret-bearing state를 즉시 제거한 뒤 stale HELLO/AUTH/ClientData·Ping은 surviving lookup reason인 `unknown_grant`/`auth_failed`/`not_bound`로 집계하며, fixed `revoked` slot은 credential retirement 전에 known revoked state가 관찰되는 경우만을 위한 reserved defensive telemetry다.
+- [x] **RELY-01**: 유효한 참가자의 opaque payload는 발신자를 제외한 동일 룸의 활성·bound 참가자에게만 byte-preserving 방식으로 전달된다.
+- [x] **RELY-02**: Relay는 gameplay 데이터의 전달, 순서, 중복 제거 또는 재전송을 보장하지 않으며 다른 룸, 만료 세션 또는 폐기 세션으로 전달하지 않는다.
+- [x] **RELY-03**: 실패하거나 느린 수신자는 global receive loop를 무기한 막거나 queue, goroutine 또는 메모리를 무한히 증가시키지 않으며 해당 실패는 bounded reason으로 집계된다.
+- [x] **SAFE-01**: 서버는 HTTP body, 룸 수, 룸 정원, 활성 세션, grant TTL, metadata와 UDP 데이터그램 크기의 명시적 hard limit을 mutation 또는 fan-out 전에 적용한다.
+- [x] **SAFE-02**: 서버는 인증 전 source, 인증된 세션, 룸과 프로세스 전체에 packet·byte·fan-out budget을 적용하여 한 발신자가 다른 룸을 고갈시키지 못하게 한다.
+- [x] **SAFE-03**: malformed, oversized, unsupported-version, expired, wrong-room, rate-limited 및 revocation-caused stale 입력은 panic이나 cross-room state mutation 없이 폐기되고 원인별로 집계된다. Room DELETE가 credential index와 secret-bearing state를 즉시 제거한 뒤 stale HELLO/AUTH/ClientData·Ping은 surviving lookup reason인 `unknown_grant`/`auth_failed`/`not_bound`로 집계하며, fixed `revoked` slot은 credential retirement 전에 known revoked state가 관찰되는 경우만을 위한 reserved defensive telemetry다.
 
 #### Unity Native Proof
 
@@ -132,16 +132,16 @@ Phase 2의 ROOM-01, ROOM-02, SESS-01 완료 근거는 [ADR 0002](../docs/decisio
 | ROOM-01 | Milestone 1 | Phase 2 | Complete |
 | ROOM-02 | Milestone 1 | Phase 2 | Complete |
 | SESS-01 | Milestone 1 | Phase 2 | Complete |
-| ROOM-03 | Milestone 1 | Phase 3 | Pending |
-| SESS-02 | Milestone 1 | Phase 3 | Pending |
-| SESS-03 | Milestone 1 | Phase 3 | Pending |
-| SESS-04 | Milestone 1 | Phase 3 | Pending |
-| RELY-01 | Milestone 1 | Phase 3 | Pending |
-| RELY-02 | Milestone 1 | Phase 3 | Pending |
-| RELY-03 | Milestone 1 | Phase 3 | Pending |
-| SAFE-01 | Milestone 1 | Phase 3 | Pending |
-| SAFE-02 | Milestone 1 | Phase 3 | Pending |
-| SAFE-03 | Milestone 1 | Phase 3 | Pending |
+| ROOM-03 | Milestone 1 | Phase 3 | Complete |
+| SESS-02 | Milestone 1 | Phase 3 | Complete |
+| SESS-03 | Milestone 1 | Phase 3 | Complete |
+| SESS-04 | Milestone 1 | Phase 3 | Complete |
+| RELY-01 | Milestone 1 | Phase 3 | Complete |
+| RELY-02 | Milestone 1 | Phase 3 | Complete |
+| RELY-03 | Milestone 1 | Phase 3 | Complete |
+| SAFE-01 | Milestone 1 | Phase 3 | Complete |
+| SAFE-02 | Milestone 1 | Phase 3 | Complete |
+| SAFE-03 | Milestone 1 | Phase 3 | Complete |
 | UNITY-01 | Milestone 1 | Phase 4 | Pending |
 | UNITY-02 | Milestone 1 | Phase 4 | Pending |
 | UNITY-03 | Milestone 1 | Phase 4 | Pending |
@@ -161,9 +161,9 @@ Phase 2의 ROOM-01, ROOM-02, SESS-01 완료 근거는 [ADR 0002](../docs/decisio
 - v1 requirements: 29 total
 - Mapped to phases: 29 ✓
 - Unmapped: 0 ✓
-- Complete: 5
-- Pending: 24
+- Complete: 15
+- Pending: 14
 
 ---
 *Requirements defined: 2026-08-08*
-*Last updated: 2026-08-09 after Phase 2 verification*
+*Last updated: 2026-08-10 after Phase 3 verification*
