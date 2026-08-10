@@ -1,6 +1,6 @@
 ---
 gsd_state_version: '1.0'
-status: blocked
+status: planned
 progress:
   total_phases: 7
   completed_phases: 2

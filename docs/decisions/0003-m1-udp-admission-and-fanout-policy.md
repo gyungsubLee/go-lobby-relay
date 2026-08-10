@@ -7,7 +7,7 @@
 - **Related requirements:** ROOM-03, SESS-02, SESS-03, SESS-04, RELY-01, RELY-02, RELY-03, SAFE-01, SAFE-02, SAFE-03
 - **Implementation plan:** [Phase 3 authenticated UDP Relay plan](../superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md)
 
-This accepted D-04 decision fixes the numeric packet, byte, and fan-out policy for Phase 3. Acceptance authorizes boundary tests and implementation planning; it does not mean any Phase 3 code or requirement is complete.
+This accepted D-04 decision fixes the numeric packet, byte, and fan-out policy for Phase 3. Acceptance authorizes boundary tests and subsequent Phase 3 implementation; it does not mean any Phase 3 code or requirement is complete.
 
 ## Context and named normal profile
 
