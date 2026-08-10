@@ -160,6 +160,22 @@ func TestReadOperatorTokenFileContract(t *testing.T) {
 			t.Fatal("replacement between Lstat and Open was accepted")
 		}
 	})
+
+	t.Run("same inode symlink replacement", func(t *testing.T) {
+		original := writeTokenFile(t, "")
+		moved := filepath.Join(filepath.Dir(original), "moved-token")
+		if _, err := readOperatorTokenWith(original, func(path string) (*os.File, error) {
+			if err := os.Rename(path, moved); err != nil {
+				return nil, err
+			}
+			if err := os.Symlink(moved, path); err != nil {
+				return nil, err
+			}
+			return os.Open(path)
+		}); err == nil {
+			t.Fatal("same-inode symlink replacement between Lstat and Open was accepted")
+		}
+	})
 }
 
 func TestRunStartsAndStopsOnCallerCancellation(t *testing.T) {

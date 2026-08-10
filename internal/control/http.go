@@ -37,6 +37,7 @@ type Config struct {
 	RequestBurst   int
 	MaxConcurrent  int
 	Now            func() time.Time
+	Fatal          func()
 }
 
 type handler struct {
@@ -47,6 +48,7 @@ type handler struct {
 	limiter        *rate.Limiter
 	semaphore      chan struct{}
 	now            func() time.Time
+	fatal          func()
 }
 
 func NewHandler(config Config, roomStore *store.Store) (http.Handler, error) {
@@ -68,6 +70,7 @@ func NewHandler(config Config, roomStore *store.Store) (http.Handler, error) {
 		limiter:        rate.NewLimiter(config.RequestRate, config.RequestBurst),
 		semaphore:      make(chan struct{}, config.MaxConcurrent),
 		now:            now,
+		fatal:          config.Fatal,
 	}, nil
 }
 
@@ -214,6 +217,12 @@ func (handler *handler) putRoom(writer http.ResponseWriter, request *http.Reques
 	allocation, created, err := handler.store.CreateRoom(roomID, definition)
 	if err != nil {
 		writeStoreError(writer, err)
+		if errors.Is(err, store.ErrFatalRandom) && handler.fatal != nil {
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			handler.fatal()
+		}
 		return
 	}
 	status := http.StatusOK

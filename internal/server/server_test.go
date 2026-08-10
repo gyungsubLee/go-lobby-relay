@@ -252,6 +252,84 @@ func TestUnexpectedOwnedLoopFailureCancelsSiblings(t *testing.T) {
 	assertAddressesRebind(t, managementAddr, relayAddr, config.RelayNetwork)
 }
 
+func TestQueuedUnexpectedLoopFailureWinsLaterCancellation(t *testing.T) {
+	server := &Server{closeSignal: make(chan struct{})}
+	runContext, cancel := context.WithCancel(context.Background())
+	results := make(chan loopResult, 3)
+	results <- server.classifyLoopResult(runContext, "management", errors.New("sensitive cause"))
+	cancel()
+	results <- server.classifyLoopResult(runContext, "relay", net.ErrClosed)
+	results <- server.classifyLoopResult(runContext, "sweeper", nil)
+
+	err := coordinateLoopResults(runContext, server.closeSignal, make(chan struct{}), results, func() {})
+	if err != errOwnedLoop {
+		t.Fatalf("queued unexpected result after cancellation = %v, want generic %v", err, errOwnedLoop)
+	}
+}
+
+func TestHTTPFatalRandomStopsServerAndJoinsSiblings(t *testing.T) {
+	config := testServerConfig()
+	deps := defaultDependencies()
+	deps.random = failingReader{}
+	server, err := newWithDependencies(config, deps)
+	if err != nil {
+		t.Fatalf("newWithDependencies(): %v", err)
+	}
+	managementAddr, relayAddr := server.ManagementAddr(), server.RelayAddr()
+	if server.runStarted {
+		t.Fatal("New started work before Run")
+	}
+	assertBoundButNotServing(t, managementAddr.String(), relayAddr.(*net.UDPAddr), config.RelayNetwork)
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- server.Run(context.Background()) }()
+	waitForManagement(t, managementAddr.String(), serverTestToken)
+	now := time.Now().UTC()
+	body := []byte(`{"capacity":1,"expires_at":"` + now.Add(time.Hour).Format(time.RFC3339Nano) +
+		`","participants":[{"participant_id":"participant","session_id":"session","grant_expires_at":"` +
+		now.Add(30*time.Minute).Format(time.RFC3339Nano) + `"}]}`)
+	request, err := http.NewRequest(http.MethodPut, "http://"+managementAddr.String()+"/v1/rooms/room", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest(): %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+base64.RawURLEncoding.EncodeToString(serverTestToken[:]))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("fatal PUT room: %v", err)
+	}
+	responseBody, readErr := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read fatal response: %v", readErr)
+	}
+	wantBody := "{\"error\":{\"code\":\"internal_error\",\"message\":\"internal server error\"}}\n"
+	if response.StatusCode != http.StatusInternalServerError || string(responseBody) != wantBody {
+		t.Fatalf("fatal PUT room = %d %q", response.StatusCode, responseBody)
+	}
+
+	select {
+	case err := <-runDone:
+		if err != errOwnedLoop {
+			t.Fatalf("Run() after HTTP fatal random = %v, want %v", err, errOwnedLoop)
+		}
+		encoded := base64.RawURLEncoding.EncodeToString(serverTestToken[:])
+		if strings.Contains(err.Error(), encoded) || strings.Contains(err.Error(), string(serverTestToken[:])) {
+			t.Fatalf("Run error disclosed operator token: %q", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP fatal random did not join owned loops")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() after HTTP fatal random: %v", err)
+	}
+	assertAddressesRebind(t, managementAddr, relayAddr, config.RelayNetwork)
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("injected random failure") }
+
 func testServerConfig() Config {
 	return Config{
 		ManagementListen: "127.0.0.1:0",

@@ -98,8 +98,13 @@ func readOperatorTokenWith(path string, open func(string) (*os.File, error)) ([3
 		return [32]byte{}, errStartup
 	}
 	defer file.Close()
-	after, err := file.Stat()
-	if err != nil || !after.Mode().IsRegular() || after.Mode().Perm() != 0o600 || !os.SameFile(before, after) {
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0o600 || !os.SameFile(before, opened) {
+		return [32]byte{}, errStartup
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !after.Mode().IsRegular() || after.Mode().Perm() != 0o600 ||
+		!os.SameFile(before, after) || !os.SameFile(opened, after) {
 		return [32]byte{}, errStartup
 	}
 	body, err := io.ReadAll(io.LimitReader(file, 46))

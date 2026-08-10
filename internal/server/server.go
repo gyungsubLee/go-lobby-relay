@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -32,6 +33,7 @@ type Config struct {
 type dependencies struct {
 	listenTCP func(string, string) (net.Listener, error)
 	listenUDP func(string, *net.UDPAddr) (*net.UDPConn, error)
+	random    io.Reader
 }
 
 func defaultDependencies() dependencies {
@@ -52,6 +54,8 @@ type Server struct {
 	finished        bool
 	closeSignal     chan struct{}
 	closeSignalOnce sync.Once
+	fatalSignal     chan struct{}
+	fatalSignalOnce sync.Once
 	shutdownOnce    sync.Once
 	shutdownErr     error
 }
@@ -65,7 +69,7 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 	if err != nil || deps.listenTCP == nil || deps.listenUDP == nil {
 		return nil, errInvalidConfig
 	}
-	rooms, err := store.New(store.Config{Limits: store.DefaultLimits()})
+	rooms, err := store.New(store.Config{Limits: store.DefaultLimits(), Random: deps.random})
 	if err != nil {
 		return nil, errInvalidConfig
 	}
@@ -90,6 +94,14 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 	if advertisedPort == 0 {
 		advertisedPort = uint16(relaySocket.LocalAddr().(*net.UDPAddr).Port)
 	}
+	server := &Server{
+		managementListener: managementListener,
+		rooms:              rooms,
+		managementAddr:     managementListener.Addr(),
+		relayAddr:          relaySocket.LocalAddr(),
+		closeSignal:        make(chan struct{}),
+		fatalSignal:        make(chan struct{}),
+	}
 	handler, err := control.NewHandler(control.Config{
 		OperatorToken:  config.OperatorToken,
 		AdvertisedHost: config.AdvertisedHost,
@@ -97,6 +109,7 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 		RequestRate:    control.HardManagementRequestRate,
 		RequestBurst:   control.HardManagementRequestBurst,
 		MaxConcurrent:  control.HardManagementConcurrent,
+		Fatal:          server.notifyFatal,
 	}, rooms)
 	if err != nil {
 		return nil, errInvalidConfig
@@ -106,15 +119,8 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 		return nil, errInvalidConfig
 	}
 
-	server := &Server{
-		managementListener: managementListener,
-		managementServer:   control.NewServer(managementListener.Addr().String(), handler),
-		relay:              udpRelay,
-		rooms:              rooms,
-		managementAddr:     managementListener.Addr(),
-		relayAddr:          relaySocket.LocalAddr(),
-		closeSignal:        make(chan struct{}),
-	}
+	server.managementServer = control.NewServer(managementListener.Addr().String(), handler)
+	server.relay = udpRelay
 	cleanup = false
 	return server, nil
 }
@@ -139,8 +145,9 @@ func (server *Server) ManagementAddr() net.Addr { return server.managementAddr }
 func (server *Server) RelayAddr() net.Addr { return server.relayAddr }
 
 type loopResult struct {
-	name string
-	err  error
+	name       string
+	err        error
+	unexpected bool
 }
 
 func (server *Server) Run(ctx context.Context) error {
@@ -162,36 +169,70 @@ func (server *Server) Run(ctx context.Context) error {
 	runContext, cancel := context.WithCancel(ctx)
 	results := make(chan loopResult, 3)
 	go func() {
-		results <- loopResult{name: "management", err: server.managementServer.Serve(server.managementListener)}
+		err := server.managementServer.Serve(server.managementListener)
+		results <- server.classifyLoopResult(runContext, "management", err)
 	}()
-	go func() { results <- loopResult{name: "relay", err: server.relay.Run()} }()
+	go func() {
+		err := server.relay.Run()
+		results <- server.classifyLoopResult(runContext, "relay", err)
+	}()
 	go func() {
 		server.rooms.RunSweeper(runContext)
-		results <- loopResult{name: "sweeper"}
+		results <- server.classifyLoopResult(runContext, "sweeper", nil)
 	}()
 
-	received := 0
-	var runErr error
-	select {
-	case <-ctx.Done():
-	case <-server.closeSignal:
-	case <-results:
-		received = 1
-		if !server.intentionalStop(ctx) {
-			runErr = errOwnedLoop
-		}
-	}
-	cancel()
-	_ = server.shutdown()
-	for received < 3 {
-		<-results
-		received++
-	}
+	runErr := coordinateLoopResults(runContext, server.closeSignal, server.fatalSignal, results, func() {
+		cancel()
+		_ = server.shutdown()
+	})
 
 	server.mu.Lock()
 	server.finished = true
 	server.mu.Unlock()
 	return runErr
+}
+
+func (server *Server) notifyFatal() {
+	server.fatalSignalOnce.Do(func() { close(server.fatalSignal) })
+}
+
+func (server *Server) classifyLoopResult(ctx context.Context, name string, err error) loopResult {
+	return loopResult{name: name, err: err, unexpected: !server.intentionalStop(ctx)}
+}
+
+func coordinateLoopResults(
+	ctx context.Context,
+	closeSignal, fatalSignal <-chan struct{},
+	results <-chan loopResult,
+	stop func(),
+) error {
+	received := 0
+	unexpected := false
+	select {
+	case <-ctx.Done():
+	case <-closeSignal:
+	case <-fatalSignal:
+		unexpected = true
+	case result := <-results:
+		received = 1
+		unexpected = result.unexpected
+	}
+	stop()
+	for received < 3 {
+		if (<-results).unexpected {
+			unexpected = true
+		}
+		received++
+	}
+	select {
+	case <-fatalSignal:
+		unexpected = true
+	default:
+	}
+	if unexpected {
+		return errOwnedLoop
+	}
+	return nil
 }
 
 func (server *Server) intentionalStop(ctx context.Context) bool {

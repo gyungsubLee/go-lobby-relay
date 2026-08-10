@@ -442,7 +442,10 @@ func TestStoreErrorsHaveFixedHTTPMappings(t *testing.T) {
 		limits := store.DefaultLimits()
 		limits.MaxOpenRooms = 1
 		limits.MaxRoomRecords = 1
-		fixture := newControlFixture(t, limits, &testSequenceReader{}, nil)
+		var fatalCalls atomic.Int32
+		fixture := newControlFixture(t, limits, &testSequenceReader{}, func(config *Config) {
+			config.Fatal = func() { fatalCalls.Add(1) }
+		})
 		body := createRoomBody(t, controlTestWall, 2*time.Hour, []testParticipantSpec{{"participant", "session", time.Hour}})
 		first := serveHandler(t, fixture.handler, http.MethodPut, "/v1/rooms/one", bytes.NewReader(body), controlBearer, "application/json")
 		if first.Code != http.StatusCreated {
@@ -450,14 +453,31 @@ func TestStoreErrorsHaveFixedHTTPMappings(t *testing.T) {
 		}
 		second := serveHandler(t, fixture.handler, http.MethodPut, "/v1/rooms/two", bytes.NewReader(body), controlBearer, "application/json")
 		assertErrorResponse(t, second, http.StatusUnprocessableEntity, "capacity_exceeded", capacityMessage)
+		if fatalCalls.Load() != 0 {
+			t.Fatalf("nonfatal capacity error sent %d fatal notifications", fatalCalls.Load())
+		}
 	})
 
 	t.Run("fatal randomness leaves no partial room", func(t *testing.T) {
 		random := &failOnceReader{delegate: &testSequenceReader{}}
-		fixture := newControlFixture(t, store.DefaultLimits(), random, nil)
+		var failed *httptest.ResponseRecorder
+		fatalCalls := 0
+		fixture := newControlFixture(t, store.DefaultLimits(), random, func(config *Config) {
+			config.Fatal = func() {
+				fatalCalls++
+				assertErrorResponse(t, failed, http.StatusInternalServerError, "internal_error", internalMessage)
+				if !failed.Flushed {
+					t.Fatal("fatal notification ran before the 500 response was flushed")
+				}
+			}
+		})
 		body := createRoomBody(t, controlTestWall, 2*time.Hour, []testParticipantSpec{{"participant", "session", time.Hour}})
-		failed := serveHandler(t, fixture.handler, http.MethodPut, "/v1/rooms/room", bytes.NewReader(body), controlBearer, "application/json")
+		failed = httptest.NewRecorder()
+		fixture.handler.ServeHTTP(failed, authorizedTestRequest(http.MethodPut, "/v1/rooms/room", bytes.NewReader(body), "application/json"))
 		assertErrorResponse(t, failed, http.StatusInternalServerError, "internal_error", internalMessage)
+		if fatalCalls != 1 {
+			t.Fatalf("fatal random sent %d fatal notifications, want 1", fatalCalls)
+		}
 		if _, err := fixture.store.GetRoom("room"); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("fatal random left partial room: %v", err)
 		}
