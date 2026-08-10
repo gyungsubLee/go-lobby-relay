@@ -8,7 +8,7 @@
 
 **Requirements owned:** UNITY-01, UNITY-02, UNITY-03.
 
-**Status:** Planned but blocked — Phase 3 is incomplete and D-05 is unapproved. The local machine currently has Unity `6000.0.26f1`, not the proposed `6000.3.20f1`; no physical Android device or routable IPv6/DNS64/NAT64 network has been established.
+**Status:** Planned but blocked — Phase 3 is complete, while D-05 remains unapproved. The local machine currently has Unity `6000.0.26f1`, not the proposed `6000.3.20f1`; no physical Android device or approved IPv4 Wi-Fi hostname has been established.
 
 **Proposed D-05 scope:** Unity `6000.3.20f1`; macOS ARM64 Mono PC build; one literal physical Android ARM64 device using IL2CPP; hostname over IPv4 Wi-Fi. Direct IPv6, DNS64/NAT64, carrier, VPN, iOS, Windows, and WebGL remain unverified and unsupported by M1 evidence.
 
