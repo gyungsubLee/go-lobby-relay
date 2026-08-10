@@ -44,6 +44,31 @@ var (
 	controlBearer    = "Bearer " + base64.RawURLEncoding.EncodeToString(controlTestToken[:])
 )
 
+func TestParseOperatorTokenIsStrictAndRejectsZero(t *testing.T) {
+	valid := base64.RawURLEncoding.EncodeToString(controlTestToken[:])
+	if got, err := ParseOperatorToken(valid); err != nil || got != controlTestToken {
+		t.Fatalf("ParseOperatorToken(valid) = (%x, %v)", got, err)
+	}
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"short", valid[:len(valid)-1]},
+		{"long", valid + "A"},
+		{"invalid alphabet", strings.Repeat("!", 43)},
+		{"noncanonical trailing bits", nonCanonicalRawURL(controlTestToken)},
+		{"all zero", base64.RawURLEncoding.EncodeToString(make([]byte, 32))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := ParseOperatorToken(tt.value); err == nil || got != ([32]byte{}) {
+				t.Fatalf("ParseOperatorToken(%q) = (%x, %v), want zero/error", tt.name, got, err)
+			}
+		})
+	}
+}
+
 func TestHandlerAuthenticatesAndRoutesCanonically(t *testing.T) {
 	wrongToken := repeatedToken(0x43)
 	authTests := []struct {

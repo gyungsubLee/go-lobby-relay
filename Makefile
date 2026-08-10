@@ -2,7 +2,7 @@ GO := $(CURDIR)/.tools/go/bin/go
 BUF := $(CURDIR)/.tools/bin/buf
 GO_ENV := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod
 
-.PHONY: tools proto-generate proto-lint proto-breaking proto-baseline go-tidy go-test protocol-check csharp-compat
+.PHONY: tools proto-generate proto-lint proto-breaking proto-baseline go-tidy go-test relay-build protocol-check csharp-compat
 
 tools:
 	./scripts/bootstrap-tools.sh
@@ -35,6 +35,10 @@ go-tidy: tools
 
 go-test: tools
 	$(GO_ENV) $(GO) test ./...
+
+relay-build: tools
+	mkdir -p $(CURDIR)/out
+	$(GO_ENV) $(GO) build -o $(CURDIR)/out/relay ./cmd/relay
 
 csharp-compat:
 	dotnet restore --artifacts-path $(CURDIR)/out/dotnet --locked-mode test/compat/csharp/Relay.Protocol.Compat.csproj
