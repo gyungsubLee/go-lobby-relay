@@ -29,14 +29,34 @@ const (
 	HardMaxBindingTTL     = 60 * time.Second
 	HardMaxPreauthSources = 4096
 
-	HardMaxPreauthSourcePacketRate  rate.Limit = 16
-	HardMaxPreauthSourcePacketBurst            = 160
-	HardMaxPreauthSourceByteRate    rate.Limit = 19_200
-	HardMaxPreauthSourceByteBurst              = 192_000
-	HardMaxPreauthGlobalPacketRate  rate.Limit = 128
-	HardMaxPreauthGlobalPacketBurst            = 1_280
-	HardMaxPreauthGlobalByteRate    rate.Limit = 153_600
-	HardMaxPreauthGlobalByteBurst              = 1_536_000
+	HardMaxPreauthSourcePacketRate        rate.Limit = 16
+	HardMaxPreauthSourcePacketBurst                  = 160
+	HardMaxPreauthSourceByteRate          rate.Limit = 19_200
+	HardMaxPreauthSourceByteBurst                    = 192_000
+	HardMaxPreauthGlobalPacketRate        rate.Limit = 128
+	HardMaxPreauthGlobalPacketBurst                  = 1_280
+	HardMaxPreauthGlobalByteRate          rate.Limit = 153_600
+	HardMaxPreauthGlobalByteBurst                    = 1_536_000
+	HardMaxSessionPacketRate                         = rate.Limit(40)
+	HardMaxSessionPacketBurst                        = 40
+	HardMaxSessionByteRate                           = rate.Limit(20_480)
+	HardMaxSessionByteBurst                          = 20_480
+	HardMaxRoomPacketRate                            = rate.Limit(160)
+	HardMaxRoomPacketBurst                           = 160
+	HardMaxRoomByteRate                              = rate.Limit(81_920)
+	HardMaxRoomByteBurst                             = 81_920
+	HardMaxAuthenticatedGlobalPacketRate             = rate.Limit(1_280)
+	HardMaxAuthenticatedGlobalPacketBurst            = 1_280
+	HardMaxAuthenticatedGlobalByteRate               = rate.Limit(655_360)
+	HardMaxAuthenticatedGlobalByteBurst              = 655_360
+	HardMaxRoomFanoutWriteRate                       = rate.Limit(480)
+	HardMaxRoomFanoutWriteBurst                      = 480
+	HardMaxRoomFanoutByteRate                        = rate.Limit(245_760)
+	HardMaxRoomFanoutByteBurst                       = 245_760
+	HardMaxGlobalFanoutWriteRate                     = rate.Limit(3_840)
+	HardMaxGlobalFanoutWriteBurst                    = 3_840
+	HardMaxGlobalFanoutByteRate                      = rate.Limit(1_966_080)
+	HardMaxGlobalFanoutByteBurst                     = 1_966_080
 )
 
 var (
@@ -68,29 +88,70 @@ type Limits struct {
 	PreauthGlobalPacketBurst int
 	PreauthGlobalByteRate    rate.Limit
 	PreauthGlobalByteBurst   int
+
+	SessionPacketRate              rate.Limit
+	SessionPacketBurst             int
+	SessionByteRate                rate.Limit
+	SessionByteBurst               int
+	RoomPacketRate                 rate.Limit
+	RoomPacketBurst                int
+	RoomByteRate                   rate.Limit
+	RoomByteBurst                  int
+	AuthenticatedGlobalPacketRate  rate.Limit
+	AuthenticatedGlobalPacketBurst int
+	AuthenticatedGlobalByteRate    rate.Limit
+	AuthenticatedGlobalByteBurst   int
+	RoomFanoutWriteRate            rate.Limit
+	RoomFanoutWriteBurst           int
+	RoomFanoutByteRate             rate.Limit
+	RoomFanoutByteBurst            int
+	GlobalFanoutWriteRate          rate.Limit
+	GlobalFanoutWriteBurst         int
+	GlobalFanoutByteRate           rate.Limit
+	GlobalFanoutByteBurst          int
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaxOpenRooms:             HardMaxOpenRooms,
-		MaxRoomRecords:           HardMaxRoomRecords,
-		MaxRoomCapacity:          HardMaxRoomCapacity,
-		MaxActiveSessions:        HardMaxActiveSessions,
-		MaxRoomTTL:               HardMaxRoomTTL,
-		MaxGrantTTL:              HardMaxGrantTTL,
-		SweepInterval:            HardMaxSweepInterval,
-		EmptyGrace:               HardMaxEmptyGrace,
-		TombstoneTTL:             HardMaxTombstoneTTL,
-		ChallengeTTL:             HardMaxChallengeTTL,
-		BindingTTL:               HardMaxBindingTTL,
-		PreauthSourcePacketRate:  HardMaxPreauthSourcePacketRate,
-		PreauthSourcePacketBurst: HardMaxPreauthSourcePacketBurst,
-		PreauthSourceByteRate:    HardMaxPreauthSourceByteRate,
-		PreauthSourceByteBurst:   HardMaxPreauthSourceByteBurst,
-		PreauthGlobalPacketRate:  HardMaxPreauthGlobalPacketRate,
-		PreauthGlobalPacketBurst: HardMaxPreauthGlobalPacketBurst,
-		PreauthGlobalByteRate:    HardMaxPreauthGlobalByteRate,
-		PreauthGlobalByteBurst:   HardMaxPreauthGlobalByteBurst,
+		MaxOpenRooms:                   HardMaxOpenRooms,
+		MaxRoomRecords:                 HardMaxRoomRecords,
+		MaxRoomCapacity:                HardMaxRoomCapacity,
+		MaxActiveSessions:              HardMaxActiveSessions,
+		MaxRoomTTL:                     HardMaxRoomTTL,
+		MaxGrantTTL:                    HardMaxGrantTTL,
+		SweepInterval:                  HardMaxSweepInterval,
+		EmptyGrace:                     HardMaxEmptyGrace,
+		TombstoneTTL:                   HardMaxTombstoneTTL,
+		ChallengeTTL:                   HardMaxChallengeTTL,
+		BindingTTL:                     HardMaxBindingTTL,
+		PreauthSourcePacketRate:        HardMaxPreauthSourcePacketRate,
+		PreauthSourcePacketBurst:       HardMaxPreauthSourcePacketBurst,
+		PreauthSourceByteRate:          HardMaxPreauthSourceByteRate,
+		PreauthSourceByteBurst:         HardMaxPreauthSourceByteBurst,
+		PreauthGlobalPacketRate:        HardMaxPreauthGlobalPacketRate,
+		PreauthGlobalPacketBurst:       HardMaxPreauthGlobalPacketBurst,
+		PreauthGlobalByteRate:          HardMaxPreauthGlobalByteRate,
+		PreauthGlobalByteBurst:         HardMaxPreauthGlobalByteBurst,
+		SessionPacketRate:              HardMaxSessionPacketRate,
+		SessionPacketBurst:             HardMaxSessionPacketBurst,
+		SessionByteRate:                HardMaxSessionByteRate,
+		SessionByteBurst:               HardMaxSessionByteBurst,
+		RoomPacketRate:                 HardMaxRoomPacketRate,
+		RoomPacketBurst:                HardMaxRoomPacketBurst,
+		RoomByteRate:                   HardMaxRoomByteRate,
+		RoomByteBurst:                  HardMaxRoomByteBurst,
+		AuthenticatedGlobalPacketRate:  HardMaxAuthenticatedGlobalPacketRate,
+		AuthenticatedGlobalPacketBurst: HardMaxAuthenticatedGlobalPacketBurst,
+		AuthenticatedGlobalByteRate:    HardMaxAuthenticatedGlobalByteRate,
+		AuthenticatedGlobalByteBurst:   HardMaxAuthenticatedGlobalByteBurst,
+		RoomFanoutWriteRate:            HardMaxRoomFanoutWriteRate,
+		RoomFanoutWriteBurst:           HardMaxRoomFanoutWriteBurst,
+		RoomFanoutByteRate:             HardMaxRoomFanoutByteRate,
+		RoomFanoutByteBurst:            HardMaxRoomFanoutByteBurst,
+		GlobalFanoutWriteRate:          HardMaxGlobalFanoutWriteRate,
+		GlobalFanoutWriteBurst:         HardMaxGlobalFanoutWriteBurst,
+		GlobalFanoutByteRate:           HardMaxGlobalFanoutByteRate,
+		GlobalFanoutByteBurst:          HardMaxGlobalFanoutByteBurst,
 	}
 }
 
@@ -172,15 +233,19 @@ type Store struct {
 	now    func() ClockReading
 	random io.Reader
 
-	roomsByID            map[string]*roomRecord
-	grantsByID           map[protocol.Bytes16]*grantRecord
-	candidatesByID       map[protocol.Bytes16]*grantRecord
-	bindingsByID         map[protocol.Bytes16]*grantRecord
-	preauthSources       map[netip.Prefix]*preauthSource
-	preauthGlobalPackets *rate.Limiter
-	preauthGlobalBytes   *rate.Limiter
-	openRooms            int
-	activeSessions       int
+	roomsByID                  map[string]*roomRecord
+	grantsByID                 map[protocol.Bytes16]*grantRecord
+	candidatesByID             map[protocol.Bytes16]*grantRecord
+	bindingsByID               map[protocol.Bytes16]*grantRecord
+	preauthSources             map[netip.Prefix]*preauthSource
+	preauthGlobalPackets       *rate.Limiter
+	preauthGlobalBytes         *rate.Limiter
+	authenticatedGlobalPackets *rate.Limiter
+	authenticatedGlobalBytes   *rate.Limiter
+	globalFanoutWrites         *rate.Limiter
+	globalFanoutBytes          *rate.Limiter
+	openRooms                  int
+	activeSessions             int
 }
 
 type roomRecordState uint8
@@ -199,22 +264,28 @@ type roomRecord struct {
 	monoDeadline      time.Duration
 	grants            []*grantRecord
 	tombstoneDeadline time.Duration
+	ingressPackets    *rate.Limiter
+	ingressBytes      *rate.Limiter
+	fanoutWrites      *rate.Limiter
+	fanoutBytes       *rate.Limiter
 }
 
 type grantRecord struct {
-	roomID        string
-	participantID string
-	sessionID     string
-	id            protocol.Bytes16
-	secret        *protocol.Bytes32
-	expiresAt     time.Time
-	monoDeadline  time.Duration
-	state         GrantState
-	bindingState  BindingState
-	generation    uint64
-	pending       *challengeRecord
-	recent        *completedHandshake
-	binding       *bindingRecord
+	roomID         string
+	participantID  string
+	sessionID      string
+	id             protocol.Bytes16
+	secret         *protocol.Bytes32
+	expiresAt      time.Time
+	monoDeadline   time.Duration
+	state          GrantState
+	bindingState   BindingState
+	generation     uint64
+	pending        *challengeRecord
+	recent         *completedHandshake
+	binding        *bindingRecord
+	ingressPackets *rate.Limiter
+	ingressBytes   *rate.Limiter
 }
 
 func New(config Config) (*Store, error) {
@@ -236,16 +307,20 @@ func New(config Config) (*Store, error) {
 	}
 
 	return &Store{
-		limits:               config.Limits,
-		now:                  now,
-		random:               random,
-		roomsByID:            make(map[string]*roomRecord),
-		grantsByID:           make(map[protocol.Bytes16]*grantRecord),
-		candidatesByID:       make(map[protocol.Bytes16]*grantRecord),
-		bindingsByID:         make(map[protocol.Bytes16]*grantRecord),
-		preauthSources:       make(map[netip.Prefix]*preauthSource),
-		preauthGlobalPackets: rate.NewLimiter(config.Limits.PreauthGlobalPacketRate, config.Limits.PreauthGlobalPacketBurst),
-		preauthGlobalBytes:   rate.NewLimiter(config.Limits.PreauthGlobalByteRate, config.Limits.PreauthGlobalByteBurst),
+		limits:                     config.Limits,
+		now:                        now,
+		random:                     random,
+		roomsByID:                  make(map[string]*roomRecord),
+		grantsByID:                 make(map[protocol.Bytes16]*grantRecord),
+		candidatesByID:             make(map[protocol.Bytes16]*grantRecord),
+		bindingsByID:               make(map[protocol.Bytes16]*grantRecord),
+		preauthSources:             make(map[netip.Prefix]*preauthSource),
+		preauthGlobalPackets:       rate.NewLimiter(config.Limits.PreauthGlobalPacketRate, config.Limits.PreauthGlobalPacketBurst),
+		preauthGlobalBytes:         rate.NewLimiter(config.Limits.PreauthGlobalByteRate, config.Limits.PreauthGlobalByteBurst),
+		authenticatedGlobalPackets: rate.NewLimiter(config.Limits.AuthenticatedGlobalPacketRate, config.Limits.AuthenticatedGlobalPacketBurst),
+		authenticatedGlobalBytes:   rate.NewLimiter(config.Limits.AuthenticatedGlobalByteRate, config.Limits.AuthenticatedGlobalByteBurst),
+		globalFanoutWrites:         rate.NewLimiter(config.Limits.GlobalFanoutWriteRate, config.Limits.GlobalFanoutWriteBurst),
+		globalFanoutBytes:          rate.NewLimiter(config.Limits.GlobalFanoutByteRate, config.Limits.GlobalFanoutByteBurst),
 	}, nil
 }
 
@@ -312,27 +387,33 @@ func (store *Store) CreateRoom(roomID string, definition RoomDefinition) (Alloca
 		}
 		secretCopy := secret
 		grant := &grantRecord{
-			roomID:        roomID,
-			participantID: participant.ParticipantID,
-			sessionID:     participant.SessionID,
-			id:            grantID,
-			secret:        &secretCopy,
-			expiresAt:     participant.GrantExpiresAt,
-			monoDeadline:  grantDeadlines[index],
-			state:         GrantStateIssued,
-			bindingState:  BindingStateUnbound,
+			roomID:         roomID,
+			participantID:  participant.ParticipantID,
+			sessionID:      participant.SessionID,
+			id:             grantID,
+			secret:         &secretCopy,
+			expiresAt:      participant.GrantExpiresAt,
+			monoDeadline:   grantDeadlines[index],
+			state:          GrantStateIssued,
+			bindingState:   BindingStateUnbound,
+			ingressPackets: rate.NewLimiter(store.limits.SessionPacketRate, store.limits.SessionPacketBurst),
+			ingressBytes:   rate.NewLimiter(store.limits.SessionByteRate, store.limits.SessionByteBurst),
 		}
 		grants[index] = grant
 		stagedIDs[grantID] = struct{}{}
 	}
 
 	record := &roomRecord{
-		state:        roomStateOpen,
-		capacity:     canonical.capacity,
-		createdAt:    wall,
-		expiresAt:    canonical.expiresAt,
-		monoDeadline: roomDeadline,
-		grants:       grants,
+		state:          roomStateOpen,
+		capacity:       canonical.capacity,
+		createdAt:      wall,
+		expiresAt:      canonical.expiresAt,
+		monoDeadline:   roomDeadline,
+		grants:         grants,
+		ingressPackets: rate.NewLimiter(store.limits.RoomPacketRate, store.limits.RoomPacketBurst),
+		ingressBytes:   rate.NewLimiter(store.limits.RoomByteRate, store.limits.RoomByteBurst),
+		fanoutWrites:   rate.NewLimiter(store.limits.RoomFanoutWriteRate, store.limits.RoomFanoutWriteBurst),
+		fanoutBytes:    rate.NewLimiter(store.limits.RoomFanoutByteRate, store.limits.RoomFanoutByteBurst),
 	}
 	store.roomsByID[roomID] = record
 	for _, grant := range grants {
@@ -585,6 +666,8 @@ func (store *Store) tombstoneRoom(room *roomRecord, now time.Duration, terminalS
 
 func (store *Store) terminalGrant(grant *grantRecord, terminalState GrantState) {
 	store.clearRelay(grant)
+	grant.ingressPackets = nil
+	grant.ingressBytes = nil
 	if grantLive(grant) {
 		store.activeSessions--
 		grant.state = terminalState
@@ -677,6 +760,26 @@ func validLimits(limits Limits) bool {
 		limits.PreauthGlobalPacketBurst > 0 && limits.PreauthGlobalPacketBurst <= HardMaxPreauthGlobalPacketBurst &&
 		validRate(limits.PreauthGlobalByteRate, HardMaxPreauthGlobalByteRate) &&
 		limits.PreauthGlobalByteBurst > 0 && limits.PreauthGlobalByteBurst <= HardMaxPreauthGlobalByteBurst &&
+		validRate(limits.SessionPacketRate, HardMaxSessionPacketRate) &&
+		limits.SessionPacketBurst > 0 && limits.SessionPacketBurst <= HardMaxSessionPacketBurst &&
+		validRate(limits.SessionByteRate, HardMaxSessionByteRate) &&
+		limits.SessionByteBurst > 0 && limits.SessionByteBurst <= HardMaxSessionByteBurst &&
+		validRate(limits.RoomPacketRate, HardMaxRoomPacketRate) &&
+		limits.RoomPacketBurst > 0 && limits.RoomPacketBurst <= HardMaxRoomPacketBurst &&
+		validRate(limits.RoomByteRate, HardMaxRoomByteRate) &&
+		limits.RoomByteBurst > 0 && limits.RoomByteBurst <= HardMaxRoomByteBurst &&
+		validRate(limits.AuthenticatedGlobalPacketRate, HardMaxAuthenticatedGlobalPacketRate) &&
+		limits.AuthenticatedGlobalPacketBurst > 0 && limits.AuthenticatedGlobalPacketBurst <= HardMaxAuthenticatedGlobalPacketBurst &&
+		validRate(limits.AuthenticatedGlobalByteRate, HardMaxAuthenticatedGlobalByteRate) &&
+		limits.AuthenticatedGlobalByteBurst > 0 && limits.AuthenticatedGlobalByteBurst <= HardMaxAuthenticatedGlobalByteBurst &&
+		validRate(limits.RoomFanoutWriteRate, HardMaxRoomFanoutWriteRate) &&
+		limits.RoomFanoutWriteBurst > 0 && limits.RoomFanoutWriteBurst <= HardMaxRoomFanoutWriteBurst &&
+		validRate(limits.RoomFanoutByteRate, HardMaxRoomFanoutByteRate) &&
+		limits.RoomFanoutByteBurst > 0 && limits.RoomFanoutByteBurst <= HardMaxRoomFanoutByteBurst &&
+		validRate(limits.GlobalFanoutWriteRate, HardMaxGlobalFanoutWriteRate) &&
+		limits.GlobalFanoutWriteBurst > 0 && limits.GlobalFanoutWriteBurst <= HardMaxGlobalFanoutWriteBurst &&
+		validRate(limits.GlobalFanoutByteRate, HardMaxGlobalFanoutByteRate) &&
+		limits.GlobalFanoutByteBurst > 0 && limits.GlobalFanoutByteBurst <= HardMaxGlobalFanoutByteBurst &&
 		limits.MaxOpenRooms <= limits.MaxRoomRecords &&
 		limits.MaxRoomCapacity <= limits.MaxActiveSessions &&
 		limits.MaxGrantTTL <= limits.MaxRoomTTL

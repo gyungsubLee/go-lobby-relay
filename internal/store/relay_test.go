@@ -22,6 +22,16 @@ func TestNewRejectsInvalidPreauthLimits(t *testing.T) {
 		{"source byte rate", HardMaxPreauthSourceByteRate, func(l *Limits, value rate.Limit) { l.PreauthSourceByteRate = value }},
 		{"global packet rate", HardMaxPreauthGlobalPacketRate, func(l *Limits, value rate.Limit) { l.PreauthGlobalPacketRate = value }},
 		{"global byte rate", HardMaxPreauthGlobalByteRate, func(l *Limits, value rate.Limit) { l.PreauthGlobalByteRate = value }},
+		{"session packet rate", HardMaxSessionPacketRate, func(l *Limits, value rate.Limit) { l.SessionPacketRate = value }},
+		{"session byte rate", HardMaxSessionByteRate, func(l *Limits, value rate.Limit) { l.SessionByteRate = value }},
+		{"room packet rate", HardMaxRoomPacketRate, func(l *Limits, value rate.Limit) { l.RoomPacketRate = value }},
+		{"room byte rate", HardMaxRoomByteRate, func(l *Limits, value rate.Limit) { l.RoomByteRate = value }},
+		{"authenticated global packet rate", HardMaxAuthenticatedGlobalPacketRate, func(l *Limits, value rate.Limit) { l.AuthenticatedGlobalPacketRate = value }},
+		{"authenticated global byte rate", HardMaxAuthenticatedGlobalByteRate, func(l *Limits, value rate.Limit) { l.AuthenticatedGlobalByteRate = value }},
+		{"room fanout write rate", HardMaxRoomFanoutWriteRate, func(l *Limits, value rate.Limit) { l.RoomFanoutWriteRate = value }},
+		{"room fanout byte rate", HardMaxRoomFanoutByteRate, func(l *Limits, value rate.Limit) { l.RoomFanoutByteRate = value }},
+		{"global fanout write rate", HardMaxGlobalFanoutWriteRate, func(l *Limits, value rate.Limit) { l.GlobalFanoutWriteRate = value }},
+		{"global fanout byte rate", HardMaxGlobalFanoutByteRate, func(l *Limits, value rate.Limit) { l.GlobalFanoutByteRate = value }},
 	}
 	for _, field := range rateFields {
 		for _, value := range []rate.Limit{0, -1, rate.Limit(math.Inf(1)), rate.Limit(math.NaN()), field.max + 1} {
@@ -41,6 +51,16 @@ func TestNewRejectsInvalidPreauthLimits(t *testing.T) {
 		{"source byte burst", HardMaxPreauthSourceByteBurst, func(l *Limits, value int) { l.PreauthSourceByteBurst = value }},
 		{"global packet burst", HardMaxPreauthGlobalPacketBurst, func(l *Limits, value int) { l.PreauthGlobalPacketBurst = value }},
 		{"global byte burst", HardMaxPreauthGlobalByteBurst, func(l *Limits, value int) { l.PreauthGlobalByteBurst = value }},
+		{"session packet burst", HardMaxSessionPacketBurst, func(l *Limits, value int) { l.SessionPacketBurst = value }},
+		{"session byte burst", HardMaxSessionByteBurst, func(l *Limits, value int) { l.SessionByteBurst = value }},
+		{"room packet burst", HardMaxRoomPacketBurst, func(l *Limits, value int) { l.RoomPacketBurst = value }},
+		{"room byte burst", HardMaxRoomByteBurst, func(l *Limits, value int) { l.RoomByteBurst = value }},
+		{"authenticated global packet burst", HardMaxAuthenticatedGlobalPacketBurst, func(l *Limits, value int) { l.AuthenticatedGlobalPacketBurst = value }},
+		{"authenticated global byte burst", HardMaxAuthenticatedGlobalByteBurst, func(l *Limits, value int) { l.AuthenticatedGlobalByteBurst = value }},
+		{"room fanout write burst", HardMaxRoomFanoutWriteBurst, func(l *Limits, value int) { l.RoomFanoutWriteBurst = value }},
+		{"room fanout byte burst", HardMaxRoomFanoutByteBurst, func(l *Limits, value int) { l.RoomFanoutByteBurst = value }},
+		{"global fanout write burst", HardMaxGlobalFanoutWriteBurst, func(l *Limits, value int) { l.GlobalFanoutWriteBurst = value }},
+		{"global fanout byte burst", HardMaxGlobalFanoutByteBurst, func(l *Limits, value int) { l.GlobalFanoutByteBurst = value }},
 	}
 	for _, field := range burstFields {
 		for _, value := range []int{0, -1, field.max + 1} {
@@ -49,6 +69,70 @@ func TestNewRejectsInvalidPreauthLimits(t *testing.T) {
 			if _, err := New(Config{Limits: limits}); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("New(%s=%d) error = %v, want ErrInvalid", field.name, value, err)
 			}
+		}
+	}
+}
+
+func TestD04LimiterEqualityOneOverAndExactRefill(t *testing.T) {
+	specs := []struct {
+		name  string
+		rate  rate.Limit
+		burst int
+		pick  func(*Store) *rate.Limiter
+	}{
+		{"preauth source packets", 16, 160, func(s *Store) *rate.Limiter { return testPreauthSource(s).packets }},
+		{"preauth source bytes", 19_200, 192_000, func(s *Store) *rate.Limiter { return testPreauthSource(s).bytes }},
+		{"preauth global packets", 128, 1_280, func(s *Store) *rate.Limiter { return s.preauthGlobalPackets }},
+		{"preauth global bytes", 153_600, 1_536_000, func(s *Store) *rate.Limiter { return s.preauthGlobalBytes }},
+		{"session packets", 40, 40, func(s *Store) *rate.Limiter { return s.roomsByID["room"].grants[0].ingressPackets }},
+		{"session bytes", 20_480, 20_480, func(s *Store) *rate.Limiter { return s.roomsByID["room"].grants[0].ingressBytes }},
+		{"room packets", 160, 160, func(s *Store) *rate.Limiter { return s.roomsByID["room"].ingressPackets }},
+		{"room bytes", 81_920, 81_920, func(s *Store) *rate.Limiter { return s.roomsByID["room"].ingressBytes }},
+		{"authenticated global packets", 1_280, 1_280, func(s *Store) *rate.Limiter { return s.authenticatedGlobalPackets }},
+		{"authenticated global bytes", 655_360, 655_360, func(s *Store) *rate.Limiter { return s.authenticatedGlobalBytes }},
+		{"room fanout writes", 480, 480, func(s *Store) *rate.Limiter { return s.roomsByID["room"].fanoutWrites }},
+		{"room fanout bytes", 245_760, 245_760, func(s *Store) *rate.Limiter { return s.roomsByID["room"].fanoutBytes }},
+		{"global fanout writes", 3_840, 3_840, func(s *Store) *rate.Limiter { return s.globalFanoutWrites }},
+		{"global fanout bytes", 1_966_080, 1_966_080, func(s *Store) *rate.Limiter { return s.globalFanoutBytes }},
+	}
+	for _, spec := range specs {
+		t.Run(spec.name+"/equality", func(t *testing.T) {
+			limiter := newD04Limiter(t, spec.pick)
+			if limiter.Limit() != spec.rate || limiter.Burst() != spec.burst {
+				t.Fatalf("limiter = %v/%d, want %v/%d", limiter.Limit(), limiter.Burst(), spec.rate, spec.burst)
+			}
+			if !allowAtomic(limiterTime(0), limiterCharge{limiter, spec.burst}) {
+				t.Fatal("exact burst was rejected")
+			}
+		})
+		t.Run(spec.name+"/one-over", func(t *testing.T) {
+			limiter := newD04Limiter(t, spec.pick)
+			now := limiterTime(0)
+			if allowAtomic(now, limiterCharge{limiter, spec.burst + 1}) {
+				t.Fatal("one-over burst was accepted")
+			}
+			if got := limiter.TokensAt(now); got != float64(spec.burst) {
+				t.Fatalf("one-over changed tokens to %v, want %d", got, spec.burst)
+			}
+		})
+		for _, refill := range []struct {
+			name string
+			at   time.Duration
+			want bool
+		}{
+			{"refill-1ns", time.Second - time.Nanosecond, false},
+			{"exact-refill", time.Second, true},
+			{"refill+1ns", time.Second + time.Nanosecond, true},
+		} {
+			t.Run(spec.name+"/"+refill.name, func(t *testing.T) {
+				limiter := newD04Limiter(t, spec.pick)
+				if !allowAtomic(limiterTime(0), limiterCharge{limiter, spec.burst}) {
+					t.Fatal("could not exhaust initial burst")
+				}
+				if got := allowAtomic(limiterTime(refill.at), limiterCharge{limiter, int(spec.rate)}); got != refill.want {
+					t.Fatalf("rate-sized charge at %v = %t, want %t", refill.at, got, refill.want)
+				}
+			})
 		}
 	}
 }
@@ -721,6 +805,618 @@ func TestDuplicateAuthAtBindingDeadlineClearsCurrentAuthority(t *testing.T) {
 	}
 }
 
+func TestClientIngressClassificationReplayAndPingCharging(t *testing.T) {
+	limits := DefaultLimits()
+	limits.SessionPacketRate = 1
+	limits.SessionPacketBurst = 1
+	fixture := newRelayStoreFixture(t, limits)
+	client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+
+	request := client.dataRequest(1, []byte("one"))
+	admitted, reason := fixture.store.AdmitClientIngress(request, 100)
+	if reason != RejectNone || admitted.Sequence() != 1 || admitted.RoomID() != client.roomID ||
+		admitted.SessionID() != client.sessionID || admitted.SenderParticipantID() != client.participantID {
+		t.Fatalf("first ingress = (%#v, %q)", admitted, reason)
+	}
+	if _, reason := fixture.store.AdmitClientIngress(request, 100); reason != RejectRateLimited {
+		t.Fatalf("rate-limited duplicate reason = %q, want rate_limited", reason)
+	}
+	second := client.dataRequest(2, []byte("two"))
+	if _, reason := fixture.store.AdmitClientIngress(second, 100); reason != RejectRateLimited {
+		t.Fatalf("fresh over limit reason = %q", reason)
+	}
+
+	fixture.setMono(time.Second)
+	if _, reason := fixture.store.AdmitClientIngress(second, 100); reason != RejectReplay {
+		t.Fatalf("consumed fresh sequence retry reason = %q, want replay", reason)
+	}
+	third := client.dataRequest(3, []byte("three"))
+	if _, reason := fixture.store.AdmitClientIngress(third, 100); reason != RejectRateLimited {
+		t.Fatalf("duplicate replay charge did not consume authenticated ingress: %q", reason)
+	}
+
+	fixture.setMono(2 * time.Second)
+	fourth := client.dataRequest(4, []byte("four"))
+	bad := fourth
+	bad.AuthTag[0] ^= 1
+	before := authenticatedBalancesAt(fixture.store, fixture.store.bindingsByID[client.bindingID], limiterTime(2*time.Second))
+	if _, reason := fixture.store.AdmitClientIngress(bad, 100); reason != RejectAuthFailed {
+		t.Fatalf("bad HMAC reason = %q", reason)
+	}
+	after := authenticatedBalancesAt(fixture.store, fixture.store.bindingsByID[client.bindingID], limiterTime(2*time.Second))
+	if after != before {
+		t.Fatalf("bad HMAC used authenticated budget: before=%#v after=%#v", before, after)
+	}
+	if _, reason := fixture.store.AdmitClientIngress(fourth, 100); reason != RejectNone {
+		t.Fatalf("good packet after bad HMAC reason = %q", reason)
+	}
+
+	fixture.setMono(3 * time.Second)
+	ping := client.pingRequest(5)
+	if reason := fixture.store.AdmitPing(ping, 90); reason != RejectNone {
+		t.Fatalf("Ping reason = %q", reason)
+	}
+	pingOver := client.pingRequest(6)
+	if reason := fixture.store.AdmitPing(pingOver, 90); reason != RejectRateLimited {
+		t.Fatalf("Ping over session limit reason = %q", reason)
+	}
+	fixture.setMono(4 * time.Second)
+	if reason := fixture.store.AdmitPing(pingOver, 90); reason != RejectReplay {
+		t.Fatalf("rate-rejected Ping replay reason = %q", reason)
+	}
+}
+
+func TestClientIngressInvalidClassesUsePreauthExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name string
+		want RejectReason
+		edit func(*relayStoreFixture, *boundTestClient, *ClientDataRequest)
+	}{
+		{"unknown binding", RejectNotBound, func(_ *relayStoreFixture, _ *boundTestClient, r *ClientDataRequest) { r.BindingID = bytes16(0xfe) }},
+		{"zero binding", RejectNotBound, func(_ *relayStoreFixture, _ *boundTestClient, r *ClientDataRequest) { r.BindingID = protocol.Bytes16{} }},
+		{"wrong room", RejectWrongRoom, func(_ *relayStoreFixture, _ *boundTestClient, r *ClientDataRequest) { r.RoomID = "other-room" }},
+		{"wrong session", RejectAuthFailed, func(_ *relayStoreFixture, _ *boundTestClient, r *ClientDataRequest) { r.SessionID = "other-session" }},
+		{"wrong endpoint", RejectWrongEndpoint, func(_ *relayStoreFixture, _ *boundTestClient, r *ClientDataRequest) {
+			r.Endpoint = netip.MustParseAddrPort("198.18.1.1:4999")
+		}},
+		{"bad HMAC", RejectAuthFailed, func(_ *relayStoreFixture, _ *boundTestClient, r *ClientDataRequest) { r.AuthTag[0] ^= 1 }},
+		{"expired", RejectExpired, func(f *relayStoreFixture, c *boundTestClient, _ *ClientDataRequest) {
+			f.store.bindingsByID[c.bindingID].binding.deadline = f.clock.reading.Mono
+		}},
+		{"revoked", RejectNotBound, func(f *relayStoreFixture, c *boundTestClient, _ *ClientDataRequest) { _ = f.store.EndRoom(c.roomID) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newRelayStoreFixture(t, DefaultLimits())
+			client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+			request := client.dataRequest(1, []byte("payload"))
+			tt.edit(fixture, &client, &request)
+			now := limiterTime(fixture.clock.reading.Mono)
+			source := fixture.store.preauthSources[sourceKey(request.Endpoint)]
+			if source == nil {
+				t.Fatal("classification endpoint unexpectedly has no canonical source record")
+			}
+			preBefore := preauthBalancesAt(fixture.store, source, now)
+			grant := fixture.store.roomsByID[client.roomID]
+			var authBefore authenticatedBalances
+			if grant != nil && grant.state != roomStateTombstone {
+				authBefore = authenticatedBalancesAt(fixture.store, grant.grants[0], now)
+			}
+			if _, reason := fixture.store.AdmitClientIngress(request, 77); reason != tt.want {
+				t.Fatalf("reason = %q, want %q", reason, tt.want)
+			}
+			preAfter := preauthBalancesAt(fixture.store, source, now)
+			wantPre := preauthBalances{preBefore.sourcePackets - 1, preBefore.sourceBytes - 77, preBefore.globalPackets - 1, preBefore.globalBytes - 77}
+			if preAfter != wantPre {
+				t.Fatalf("preauth charge = %#v -> %#v, want %#v", preBefore, preAfter, wantPre)
+			}
+			if grant != nil && grant.state != roomStateTombstone {
+				if authAfter := authenticatedBalancesAt(fixture.store, grant.grants[0], now); authAfter != authBefore {
+					t.Fatalf("invalid class used authenticated budget: %#v -> %#v", authBefore, authAfter)
+				}
+			}
+		})
+	}
+}
+
+func TestPreauthRateLimitWinsWithoutAuthenticatedDoubleCharge(t *testing.T) {
+	limits := DefaultLimits()
+	limits.PreauthSourcePacketRate, limits.PreauthSourcePacketBurst = 2, 2
+	fixture := newRelayStoreFixture(t, limits)
+	client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+	request := client.dataRequest(1, nil)
+	request.AuthTag[0] ^= 1
+	grant := fixture.store.bindingsByID[client.bindingID]
+	now := limiterTime(0)
+	before := authenticatedBalancesAt(fixture.store, grant, now)
+	if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectRateLimited {
+		t.Fatalf("bad HMAC with exhausted preauth reason = %q, want rate_limited", reason)
+	}
+	if after := authenticatedBalancesAt(fixture.store, grant, now); after != before {
+		t.Fatalf("preauth rejection double-charged authenticated group: %#v -> %#v", before, after)
+	}
+	request = client.dataRequest(1, nil)
+	if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectNone {
+		t.Fatalf("valid authenticated packet was affected by preauth exhaustion: %q", reason)
+	}
+}
+
+func TestExpiredBoundLikeRateLimitDoesNotMutateAuthorityBeforeAdmission(t *testing.T) {
+	for _, target := range []string{"binding", "grant", "room"} {
+		t.Run(target, func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.PreauthSourcePacketRate = 0.1
+			limits.PreauthSourcePacketBurst = 2
+			fixture := newRelayStoreFixture(t, limits)
+			client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+			room := fixture.store.roomsByID["room"]
+			grant := fixture.store.bindingsByID[client.bindingID]
+			binding := grant.binding
+			switch target {
+			case "binding":
+				binding.deadline = 2 * time.Second
+			case "grant":
+				grant.monoDeadline = 2 * time.Second
+			case "room":
+				room.monoDeadline = 2 * time.Second
+			}
+			fixture.setMono(2 * time.Second)
+			request := client.dataRequest(1, nil)
+			if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectRateLimited {
+				t.Fatalf("AdmitClientIngress(exhausted preauth, expired %s) reason = %q", target, reason)
+			}
+			if fixture.store.roomsByID["room"] != room || room.state != roomStateOpen ||
+				fixture.store.bindingsByID[client.bindingID] != grant || grant.binding != binding ||
+				grant.state != GrantStateBound || grant.secret == nil || binding.key != client.key {
+				t.Fatalf("rate-limited expired %s input mutated authority: room=%#v grant=%#v binding=%#v", target, room, grant, binding)
+			}
+		})
+	}
+}
+
+func TestHMACValidTooOldPacketChargesIngressWithoutReplayMutation(t *testing.T) {
+	fixture := newRelayStoreFixture(t, DefaultLimits())
+	client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+	request := client.dataRequest(65, nil)
+	if _, reason := fixture.store.AdmitClientIngress(request, 10); reason != RejectNone {
+		t.Fatalf("highest ingress: %q", reason)
+	}
+	grant := fixture.store.bindingsByID[client.bindingID]
+	replayBefore := grant.binding.replay
+	now := limiterTime(0)
+	before := authenticatedBalancesAt(fixture.store, grant, now)
+	tooOld := client.dataRequest(1, nil)
+	if _, reason := fixture.store.AdmitClientIngress(tooOld, 10); reason != RejectReplay {
+		t.Fatalf("highest-64 ingress reason = %q", reason)
+	}
+	if grant.binding.replay != replayBefore {
+		t.Fatalf("too-old ingress changed replay: %#v -> %#v", replayBefore, grant.binding.replay)
+	}
+	after := authenticatedBalancesAt(fixture.store, grant, now)
+	want := authenticatedBalances{
+		before.sessionPackets - 1, before.sessionBytes - 10,
+		before.roomPackets - 1, before.roomBytes - 10,
+		before.globalPackets - 1, before.globalBytes - 10,
+	}
+	if after != want {
+		t.Fatalf("too-old ingress charge = %#v, want %#v", after, want)
+	}
+}
+
+func TestAuthenticatedIngressAtomicGroupsAndIsolation(t *testing.T) {
+	t.Run("session failure leaves room and global untouched", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.SessionPacketRate, limits.SessionPacketBurst = 1, 1
+		limits.RoomPacketRate, limits.RoomPacketBurst = 3, 3
+		limits.AuthenticatedGlobalPacketRate, limits.AuthenticatedGlobalPacketBurst = 3, 3
+		fixture := newRelayStoreFixture(t, limits)
+		clients := fixture.addBoundRoom(t, "room", 2, 1)
+		first := clients[0].dataRequest(1, nil)
+		if _, reason := fixture.store.AdmitClientIngress(first, 1); reason != RejectNone {
+			t.Fatalf("first ingress: %q", reason)
+		}
+		grant := fixture.store.bindingsByID[clients[0].bindingID]
+		now := limiterTime(0)
+		before := authenticatedBalancesAt(fixture.store, grant, now)
+		over := clients[0].dataRequest(2, nil)
+		if _, reason := fixture.store.AdmitClientIngress(over, 1); reason != RejectRateLimited {
+			t.Fatalf("session one-over reason = %q", reason)
+		}
+		after := authenticatedBalancesAt(fixture.store, grant, now)
+		if after.roomPackets != before.roomPackets || after.roomBytes != before.roomBytes ||
+			after.globalPackets != before.globalPackets || after.globalBytes != before.globalBytes {
+			t.Fatalf("session block partially charged parent scopes: %#v -> %#v", before, after)
+		}
+		other := clients[1].dataRequest(1, nil)
+		if _, reason := fixture.store.AdmitClientIngress(other, 1); reason != RejectNone {
+			t.Fatalf("isolated session reason = %q", reason)
+		}
+	})
+
+	t.Run("room failure leaves session and global untouched", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.SessionPacketRate, limits.SessionPacketBurst = 2, 2
+		limits.RoomPacketRate, limits.RoomPacketBurst = 1, 1
+		limits.AuthenticatedGlobalPacketRate, limits.AuthenticatedGlobalPacketBurst = 2, 2
+		fixture := newRelayStoreFixture(t, limits)
+		clients := fixture.addBoundRoom(t, "room", 2, 1)
+		first := clients[0].dataRequest(1, nil)
+		if _, reason := fixture.store.AdmitClientIngress(first, 1); reason != RejectNone {
+			t.Fatalf("first ingress: %q", reason)
+		}
+		grant := fixture.store.bindingsByID[clients[1].bindingID]
+		now := limiterTime(0)
+		before := authenticatedBalancesAt(fixture.store, grant, now)
+		second := clients[1].dataRequest(1, nil)
+		if _, reason := fixture.store.AdmitClientIngress(second, 1); reason != RejectRateLimited {
+			t.Fatalf("room one-over reason = %q", reason)
+		}
+		after := authenticatedBalancesAt(fixture.store, grant, now)
+		if after.sessionPackets != before.sessionPackets || after.sessionBytes != before.sessionBytes ||
+			after.globalPackets != before.globalPackets || after.globalBytes != before.globalBytes {
+			t.Fatalf("room block partially charged sibling scopes: %#v -> %#v", before, after)
+		}
+	})
+
+	t.Run("global failure leaves session and room untouched", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.SessionPacketRate, limits.SessionPacketBurst = 2, 2
+		limits.RoomPacketRate, limits.RoomPacketBurst = 2, 2
+		limits.AuthenticatedGlobalPacketRate, limits.AuthenticatedGlobalPacketBurst = 1, 1
+		fixture := newRelayStoreFixture(t, limits)
+		first := fixture.addBoundRoom(t, "room-a", 1, 1)[0]
+		second := fixture.addBoundRoom(t, "room-b", 1, 2)[0]
+		request := first.dataRequest(1, nil)
+		if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectNone {
+			t.Fatalf("first ingress: %q", reason)
+		}
+		grant := fixture.store.bindingsByID[second.bindingID]
+		now := limiterTime(0)
+		before := authenticatedBalancesAt(fixture.store, grant, now)
+		request = second.dataRequest(1, nil)
+		if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectRateLimited {
+			t.Fatalf("global one-over reason = %q", reason)
+		}
+		after := authenticatedBalancesAt(fixture.store, grant, now)
+		if after.sessionPackets != before.sessionPackets || after.sessionBytes != before.sessionBytes ||
+			after.roomPackets != before.roomPackets || after.roomBytes != before.roomBytes {
+			t.Fatalf("global block partially charged child scopes: %#v -> %#v", before, after)
+		}
+	})
+}
+
+func TestIngressChargesObservedBytesIncludingSaturatedRead(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		cost int
+		want RejectReason
+	}{
+		{"exact 1201", 1_201, RejectNone},
+		{"one over configured bytes", 1_202, RejectRateLimited},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.SessionByteRate, limits.SessionByteBurst = 1_201, 1_201
+			fixture := newRelayStoreFixture(t, limits)
+			client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+			request := client.dataRequest(1, nil)
+			if _, reason := fixture.store.AdmitClientIngress(request, tt.cost); reason != tt.want {
+				t.Fatalf("reason = %q, want %q", reason, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdmittedValueIsOpaqueAndFanoutSnapshotsAuthoritativeRecipients(t *testing.T) {
+	typeOf := reflect.TypeOf(AdmittedClientData{})
+	for index := range typeOf.NumField() {
+		field := typeOf.Field(index)
+		if field.PkgPath == "" {
+			t.Fatalf("AdmittedClientData exposes field %s", field.Name)
+		}
+		if field.Type == reflect.TypeOf((*grantRecord)(nil)) || field.Type == reflect.TypeOf(protocol.Bytes32{}) || field.Type.Kind() == reflect.Bool {
+			t.Fatalf("AdmittedClientData contains forgeable/secret field %s %v", field.Name, field.Type)
+		}
+	}
+
+	fixture := newRelayStoreFixture(t, DefaultLimits())
+	clients := fixture.addBoundRoom(t, "room", 5, 1)
+	_ = fixture.addBoundRoom(t, "other-room", 1, 2)
+	fixture.store.clearBinding(fixture.store.bindingsByID[clients[2].bindingID])
+	fixture.store.terminalGrant(fixture.store.bindingsByID[clients[3].bindingID], GrantStateExpired)
+	fixture.store.terminalGrant(fixture.store.bindingsByID[clients[4].bindingID], GrantStateRevoked)
+
+	request := clients[0].dataRequest(7, []byte("opaque"))
+	admitted, reason := fixture.store.AdmitClientIngress(request, 100)
+	if reason != RejectNone {
+		t.Fatalf("AdmitClientIngress(): %q", reason)
+	}
+	plan, reason := fixture.store.AdmitFanout(admitted, 111)
+	if reason != RejectNone {
+		t.Fatalf("AdmitFanout(): %q", reason)
+	}
+	if plan.RoomID != "room" || plan.SessionID != clients[0].sessionID ||
+		plan.SenderParticipantID != clients[0].participantID || plan.Sequence != 7 ||
+		!reflect.DeepEqual(plan.Recipients, []netip.AddrPort{clients[1].endpoint}) {
+		t.Fatalf("relay plan = %#v", plan)
+	}
+	plan.Recipients[0] = netip.MustParseAddrPort("203.0.113.250:9999")
+	second, reason := fixture.store.AdmitFanout(admitted, 111)
+	if reason != RejectNone || !reflect.DeepEqual(second.Recipients, []netip.AddrPort{clients[1].endpoint}) {
+		t.Fatalf("recipient snapshot shared mutable state: (%#v, %q)", second, reason)
+	}
+	if _, reason := fixture.store.AdmitFanout(AdmittedClientData{}, 1); reason != RejectNotBound {
+		t.Fatalf("zero admitted value reason = %q", reason)
+	}
+	other := newRelayStoreFixture(t, DefaultLimits())
+	if _, reason := other.store.AdmitFanout(admitted, 1); reason != RejectNotBound {
+		t.Fatalf("cross-store admitted value reason = %q", reason)
+	}
+}
+
+func TestFanoutAtomicCostsAndNoIngressRefund(t *testing.T) {
+	t.Run("room rejection charges neither room nor global", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.RoomFanoutWriteRate, limits.RoomFanoutWriteBurst = 1, 1
+		limits.GlobalFanoutWriteRate, limits.GlobalFanoutWriteBurst = 2, 2
+		fixture := newRelayStoreFixture(t, limits)
+		clients := fixture.addBoundRoom(t, "room", 2, 1)
+		request := clients[0].dataRequest(1, nil)
+		admitted, _ := fixture.store.AdmitClientIngress(request, 1)
+		if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectNone {
+			t.Fatalf("first fanout: %q", reason)
+		}
+		now := limiterTime(0)
+		before := fanoutBalancesAt(fixture.store, fixture.store.roomsByID["room"], now)
+		if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectFanoutLimited {
+			t.Fatalf("room one-over reason = %q", reason)
+		}
+		if after := fanoutBalancesAt(fixture.store, fixture.store.roomsByID["room"], now); after != before {
+			t.Fatalf("fanout rejection partially charged: %#v -> %#v", before, after)
+		}
+	})
+
+	t.Run("global rejection leaves room untouched", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.RoomFanoutWriteRate, limits.RoomFanoutWriteBurst = 2, 2
+		limits.GlobalFanoutWriteRate, limits.GlobalFanoutWriteBurst = 1, 1
+		fixture := newRelayStoreFixture(t, limits)
+		a := fixture.addBoundRoom(t, "room-a", 2, 1)
+		b := fixture.addBoundRoom(t, "room-b", 2, 2)
+		request := a[0].dataRequest(1, nil)
+		admitted, _ := fixture.store.AdmitClientIngress(request, 1)
+		if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectNone {
+			t.Fatalf("first fanout: %q", reason)
+		}
+		request = b[0].dataRequest(1, nil)
+		admitted, _ = fixture.store.AdmitClientIngress(request, 1)
+		now := limiterTime(0)
+		before := fanoutBalancesAt(fixture.store, fixture.store.roomsByID["room-b"], now)
+		if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectFanoutLimited {
+			t.Fatalf("global one-over reason = %q", reason)
+		}
+		if after := fanoutBalancesAt(fixture.store, fixture.store.roomsByID["room-b"], now); after != before {
+			t.Fatalf("global fanout rejection partially charged room: %#v -> %#v", before, after)
+		}
+	})
+
+	t.Run("exact output bytes times recipient count", func(t *testing.T) {
+		for _, tt := range []struct {
+			name        string
+			outputBytes int
+			want        RejectReason
+		}{
+			{"equality", 100, RejectNone},
+			{"one over", 101, RejectFanoutLimited},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				limits := DefaultLimits()
+				limits.RoomFanoutByteRate, limits.RoomFanoutByteBurst = 200, 200
+				limits.GlobalFanoutByteRate, limits.GlobalFanoutByteBurst = 200, 200
+				fixture := newRelayStoreFixture(t, limits)
+				clients := fixture.addBoundRoom(t, "room", 3, 1)
+				request := clients[0].dataRequest(1, nil)
+				admitted, _ := fixture.store.AdmitClientIngress(request, 1)
+				if _, reason := fixture.store.AdmitFanout(admitted, tt.outputBytes); reason != tt.want {
+					t.Fatalf("reason = %q, want %q", reason, tt.want)
+				}
+			})
+		}
+	})
+
+	t.Run("output and fanout rejection never refund ingress", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.SessionPacketRate, limits.SessionPacketBurst = 1, 1
+		limits.RoomFanoutWriteRate, limits.RoomFanoutWriteBurst = 1, 1
+		fixture := newRelayStoreFixture(t, limits)
+		clients := fixture.addBoundRoom(t, "room", 3, 1)
+		request := clients[0].dataRequest(1, nil)
+		admitted, _ := fixture.store.AdmitClientIngress(request, 1)
+		if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectFanoutLimited {
+			t.Fatalf("fanout reason = %q", reason)
+		}
+		request = clients[0].dataRequest(2, nil)
+		if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectRateLimited {
+			t.Fatalf("fanout failure refunded ingress: %q", reason)
+		}
+	})
+}
+
+func TestOutputAndFanoutRejectionKeepFreshReplaySpent(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		setup       func(*Limits)
+		fanoutBytes int
+		want        RejectReason
+	}{
+		{"output", func(*Limits) {}, protocol.MaxDatagramBytes + 1, RejectOversized},
+		{"fanout", func(l *Limits) { l.RoomFanoutWriteRate, l.RoomFanoutWriteBurst = 1, 1 }, 1, RejectFanoutLimited},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			limits := DefaultLimits()
+			tt.setup(&limits)
+			fixture := newRelayStoreFixture(t, limits)
+			clients := fixture.addBoundRoom(t, "room", 3, 1)
+			request := clients[0].dataRequest(1, nil)
+			admitted, reason := fixture.store.AdmitClientIngress(request, 1)
+			if reason != RejectNone {
+				t.Fatalf("AdmitClientIngress(): %q", reason)
+			}
+			if _, reason := fixture.store.AdmitFanout(admitted, tt.fanoutBytes); reason != tt.want {
+				t.Fatalf("AdmitFanout() reason = %q, want %q", reason, tt.want)
+			}
+			if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectReplay {
+				t.Fatalf("retry after %s rejection reason = %q, want replay", tt.name, reason)
+			}
+		})
+	}
+}
+
+func TestFanoutRejectsInvalidCostsAndStaleAdmissionWithoutCharge(t *testing.T) {
+	fixture := newRelayStoreFixture(t, DefaultLimits())
+	clients := fixture.addBoundRoom(t, "room", 3, 1)
+	request := clients[0].dataRequest(1, nil)
+	admitted, _ := fixture.store.AdmitClientIngress(request, 1)
+	now := limiterTime(0)
+	room := fixture.store.roomsByID["room"]
+	for _, outputBytes := range []int{-1, protocol.MaxDatagramBytes + 1, math.MaxInt} {
+		before := fanoutBalancesAt(fixture.store, room, now)
+		if _, reason := fixture.store.AdmitFanout(admitted, outputBytes); reason != RejectOversized {
+			t.Fatalf("AdmitFanout(%d) reason = %q, want oversized", outputBytes, reason)
+		}
+		if after := fanoutBalancesAt(fixture.store, room, now); after != before {
+			t.Fatalf("invalid output cost %d charged fanout: %#v -> %#v", outputBytes, before, after)
+		}
+	}
+
+	fixture.rebind(t, &clients[0], netip.MustParseAddrPort("198.18.9.9:4999"))
+	before := fanoutBalancesAt(fixture.store, room, now)
+	if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectNotBound {
+		t.Fatalf("generation-stale admitted value reason = %q", reason)
+	}
+	if after := fanoutBalancesAt(fixture.store, room, now); after != before {
+		t.Fatalf("stale admitted value charged fanout: %#v -> %#v", before, after)
+	}
+}
+
+func TestFanoutRechecksExactBindingDeadlineAfterMarshal(t *testing.T) {
+	fixture := newRelayStoreFixture(t, DefaultLimits())
+	clients := fixture.addBoundRoom(t, "room", 2, 1)
+	request := clients[0].dataRequest(1, nil)
+	admitted, reason := fixture.store.AdmitClientIngress(request, 1)
+	if reason != RejectNone {
+		t.Fatalf("AdmitClientIngress(): %q", reason)
+	}
+	fixture.setMono(HardMaxBindingTTL)
+	now := limiterTime(HardMaxBindingTTL)
+	room := fixture.store.roomsByID["room"]
+	before := fanoutBalancesAt(fixture.store, room, now)
+	if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != RejectExpired {
+		t.Fatalf("AdmitFanout(exact binding deadline) reason = %q", reason)
+	}
+	if after := fanoutBalancesAt(fixture.store, room, now); after != before {
+		t.Fatalf("expired fanout charged budget: %#v -> %#v", before, after)
+	}
+}
+
+func TestFanoutRejectsAdmittedValueAfterDeleteRoomAndGrantExpiry(t *testing.T) {
+	for _, target := range []string{"delete", "room expiry", "grant expiry"} {
+		t.Run(target, func(t *testing.T) {
+			fixture := newRelayStoreFixture(t, DefaultLimits())
+			clients := fixture.addBoundRoom(t, "room", 2, 1)
+			request := clients[0].dataRequest(1, nil)
+			admitted, reason := fixture.store.AdmitClientIngress(request, 1)
+			if reason != RejectNone {
+				t.Fatalf("AdmitClientIngress(): %q", reason)
+			}
+			room := fixture.store.roomsByID["room"]
+			grant := fixture.store.bindingsByID[clients[0].bindingID]
+			want := RejectExpired
+			switch target {
+			case "delete":
+				if err := fixture.store.EndRoom("room"); err != nil {
+					t.Fatalf("EndRoom(): %v", err)
+				}
+				want = RejectNotBound
+			case "room expiry":
+				room.monoDeadline = time.Second
+				fixture.setMono(time.Second)
+			case "grant expiry":
+				grant.monoDeadline = time.Second
+				fixture.setMono(time.Second)
+			}
+			if _, reason := fixture.store.AdmitFanout(admitted, 1); reason != want {
+				t.Fatalf("AdmitFanout(after %s) reason = %q, want %q", target, reason, want)
+			}
+		})
+	}
+}
+
+func TestEmptyFanoutAndRoomIsolationUnderConcurrentTraffic(t *testing.T) {
+	limits := DefaultLimits()
+	limits.RoomPacketRate, limits.RoomPacketBurst = 1, 1
+	fixture := newRelayStoreFixture(t, limits)
+	a := fixture.addBoundRoom(t, "room-a", 1, 1)[0]
+	b := fixture.addBoundRoom(t, "room-b", 1, 2)[0]
+	type result struct {
+		plan   RelayPlan
+		reason RejectReason
+	}
+	results := make(chan result, 2)
+	fanoutBefore := fanoutBalancesAt(fixture.store, fixture.store.roomsByID["room-a"], limiterTime(0))
+	for _, client := range []boundTestClient{a, b} {
+		client := client
+		go func() {
+			request := client.dataRequest(1, nil)
+			admitted, reason := fixture.store.AdmitClientIngress(request, 1)
+			if reason != RejectNone {
+				results <- result{reason: reason}
+				return
+			}
+			plan, reason := fixture.store.AdmitFanout(admitted, 1)
+			results <- result{plan: plan, reason: reason}
+		}()
+	}
+	for range 2 {
+		got := <-results
+		if got.reason != RejectNone || len(got.plan.Recipients) != 0 {
+			t.Fatalf("concurrent isolated relay = (%#v, %q)", got.plan, got.reason)
+		}
+	}
+	if fanoutAfter := fanoutBalancesAt(fixture.store, fixture.store.roomsByID["room-a"], limiterTime(0)); fanoutAfter != fanoutBefore {
+		t.Fatalf("empty recipient plans charged fanout: %#v -> %#v", fanoutBefore, fanoutAfter)
+	}
+	request := a.dataRequest(2, nil)
+	if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectRateLimited {
+		t.Fatalf("room-a one-over reason = %q", reason)
+	}
+}
+
+func TestSessionLimiterSurvivesRebind(t *testing.T) {
+	limits := DefaultLimits()
+	limits.SessionPacketRate, limits.SessionPacketBurst = 1, 1
+	fixture := newRelayStoreFixture(t, limits)
+	client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+	grant := fixture.store.bindingsByID[client.bindingID]
+	limiter := grant.ingressPackets
+	request := client.dataRequest(1, nil)
+	if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectNone {
+		t.Fatalf("first ingress: %q", reason)
+	}
+	fixture.rebind(t, &client, netip.MustParseAddrPort("198.18.1.2:4500"))
+	if grant.ingressPackets != limiter {
+		t.Fatal("rebind replaced the session limiter")
+	}
+	request = client.dataRequest(1, nil)
+	if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectRateLimited {
+		t.Fatalf("rebind reset the session burst: %q", reason)
+	}
+	fixture.setMono(time.Second)
+	if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectReplay {
+		t.Fatalf("rate-rejected new-binding sequence was not consumed: %q", reason)
+	}
+}
+
 func TestPreauthSourceKeysAndAtomicAdmission(t *testing.T) {
 	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
 	v4a := netip.MustParseAddrPort("192.0.2.1:1000")
@@ -939,15 +1635,30 @@ func TestPreauthFullTableUsesProcessOnlyAndCreatesNoRecord(t *testing.T) {
 	fixture.clock.reading.Wall = testWall.Add(fixture.clock.reading.Mono)
 	newEndpoint := netip.MustParseAddrPort("11.0.0.1:1000")
 	now := limiterTime(fixture.clock.reading.Mono)
-	before := fixture.store.preauthGlobalPackets.TokensAt(now)
-	if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: newEndpoint, InputBytes: 1}); reason != RejectRateLimited {
+	packetsBefore := fixture.store.preauthGlobalPackets.TokensAt(now)
+	bytesBefore := fixture.store.preauthGlobalBytes.TokensAt(now)
+	if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: newEndpoint, InputBytes: 1_201}); reason != RejectRateLimited {
 		t.Fatalf("full-table new source reason = %q", reason)
 	}
 	if len(fixture.store.preauthSources) != HardMaxPreauthSources || fixture.store.preauthSources[sourceKey(newEndpoint)] != nil {
 		t.Fatal("full-table new source created state")
 	}
-	if got := fixture.store.preauthGlobalPackets.TokensAt(now); got != before-1 {
-		t.Fatalf("full-table process-only tokens = %v, want %v", got, before-1)
+	if got := fixture.store.preauthGlobalPackets.TokensAt(now); got != packetsBefore-1 {
+		t.Fatalf("full-table process-only packet tokens = %v, want %v", got, packetsBefore-1)
+	}
+	if got := fixture.store.preauthGlobalBytes.TokensAt(now); got != bytesBefore-1_201 {
+		t.Fatalf("full-table process-only byte tokens = %v, want %v", got, bytesBefore-1_201)
+	}
+	packetsBefore = fixture.store.preauthGlobalPackets.TokensAt(now)
+	bytesBefore = fixture.store.preauthGlobalBytes.TokensAt(now)
+	if reason := fixture.store.AdmitPreauth(PreauthRequest{
+		Endpoint: netip.MustParseAddrPort("11.0.0.2:1000"), InputBytes: fixture.limits.PreauthGlobalByteBurst + 1,
+	}); reason != RejectRateLimited {
+		t.Fatalf("full-table process byte one-over reason = %q", reason)
+	}
+	if packetsAfter, bytesAfter := fixture.store.preauthGlobalPackets.TokensAt(now), fixture.store.preauthGlobalBytes.TokensAt(now); packetsAfter != packetsBefore || bytesAfter != bytesBefore {
+		t.Fatalf("full-table process rejection partially charged: packets %v -> %v bytes %v -> %v",
+			packetsBefore, packetsAfter, bytesBefore, bytesAfter)
 	}
 	existing := netip.MustParseAddrPort("10.0.0.1:2000")
 	record := fixture.store.preauthSources[sourceKey(existing)]
@@ -1002,17 +1713,69 @@ func TestExpireAndEndRoomClearRelaySecretsAndIndexes(t *testing.T) {
 	if reason != RejectNone {
 		t.Fatalf("Authenticate(): %q", reason)
 	}
+	fixture.random.reset(filled(0xa2, 16), filled(0xa3, 32))
+	pending, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, bytes16(0xa1), netip.MustParseAddrPort("192.0.2.73:7000")))
+	if reason != RejectNone {
+		t.Fatalf("pending rebind BeginChallenge(): %q", reason)
+	}
+	room := fixture.store.roomsByID["room"]
+	grant := fixture.grant(0)
 	binding := fixture.grant(0).binding
 	recent := fixture.grant(0).recent
+	pendingRecord := fixture.grant(0).pending
 	if err := fixture.store.EndRoom("room"); err != nil {
 		t.Fatalf("EndRoom(): %v", err)
 	}
 	if len(fixture.store.candidatesByID) != 0 || len(fixture.store.bindingsByID) != 0 ||
 		binding.key != (protocol.Bytes32{}) || binding.id != (protocol.Bytes16{}) || binding.endpoint.IsValid() ||
-		recent.candidateID != (protocol.Bytes16{}) || recent.clientNonce != (protocol.Bytes16{}) || recent.serverNonce != (protocol.Bytes32{}) {
-		t.Fatalf("terminal cleanup retained relay material: bound=%x binding=%#v recent=%#v", bound.BindingID, binding, recent)
+		recent.candidateID != (protocol.Bytes16{}) || recent.clientNonce != (protocol.Bytes16{}) || recent.serverNonce != (protocol.Bytes32{}) ||
+		pendingRecord.candidateID != (protocol.Bytes16{}) || pendingRecord.clientNonce != (protocol.Bytes16{}) || pendingRecord.serverNonce != (protocol.Bytes32{}) ||
+		grant.ingressPackets != nil || grant.ingressBytes != nil || room.ingressPackets != nil || room.ingressBytes != nil ||
+		room.fanoutWrites != nil || room.fanoutBytes != nil {
+		t.Fatalf("terminal cleanup retained relay material: bound=%x pending=%x binding=%#v recent=%#v", bound.BindingID, pending.CandidateID, binding, recent)
 	}
 	assertStoreInvariants(t, fixture.store)
+}
+
+func TestRelayAuthorityEndsAtExactRoomGrantAndBindingDeadlines(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		roomTTL  time.Duration
+		grantTTL time.Duration
+	}{
+		{"room", 2 * time.Second, 2 * time.Second},
+		{"grant", time.Hour, 2 * time.Second},
+		{"binding", time.Hour, 30 * time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHandshakeFixture(t, tt.roomTTL, tt.grantTTL, 1)
+			if tt.name == "binding" {
+				fixture.store.limits.BindingTTL = 2 * time.Second
+			}
+			endpoint := netip.MustParseAddrPort("192.0.2.74:7000")
+			nonce := bytes16(0xb1)
+			fixture.random.reset(filled(0xb2, 16), filled(0xb3, 32), filled(0xb4, 16))
+			challenge, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, endpoint))
+			if reason != RejectNone {
+				t.Fatalf("BeginChallenge(): %q", reason)
+			}
+			bound, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, endpoint))
+			if reason != RejectNone {
+				t.Fatalf("Authenticate(): %q", reason)
+			}
+			key := fixture.grant(0).binding.key
+			request := ClientDataRequest{
+				RoomID: "room", SessionID: fixture.session(0), BindingID: bound.BindingID, Sequence: 1,
+				Endpoint: endpoint,
+			}
+			request.AuthTag = protocol.ClientDataTag(key, protocol.Revision, request.RoomID, request.SessionID,
+				request.BindingID, request.Sequence, request.Payload)
+			fixture.clock.reading = ClockReading{Wall: testWall.Add(2 * time.Second), Mono: 2 * time.Second}
+			if _, reason := fixture.store.AdmitClientIngress(request, 1); reason != RejectExpired {
+				t.Fatalf("AdmitClientIngress(exact %s deadline) reason = %q", tt.name, reason)
+			}
+		})
+	}
 }
 
 type preauthBalances struct {
@@ -1139,4 +1902,169 @@ func containsFold(value, fragment string) bool {
 		}
 	}
 	return false
+}
+
+func newD04Limiter(t *testing.T, pick func(*Store) *rate.Limiter) *rate.Limiter {
+	t.Helper()
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+	store := newTestStore(t, DefaultLimits(), clock, &sequenceReader{})
+	if _, _, err := store.CreateRoom("room", validDefinition(testWall, 1)); err != nil {
+		t.Fatalf("CreateRoom(): %v", err)
+	}
+	return pick(store)
+}
+
+func testPreauthSource(store *Store) *preauthSource {
+	key := sourceKey(netip.MustParseAddrPort("192.0.2.1:4000"))
+	source := store.preauthSources[key]
+	if source == nil {
+		source = &preauthSource{
+			packets: rate.NewLimiter(store.limits.PreauthSourcePacketRate, store.limits.PreauthSourcePacketBurst),
+			bytes:   rate.NewLimiter(store.limits.PreauthSourceByteRate, store.limits.PreauthSourceByteBurst),
+		}
+		store.preauthSources[key] = source
+	}
+	return source
+}
+
+type relayStoreFixture struct {
+	store  *Store
+	clock  *manualClock
+	random *sequenceReader
+}
+
+type boundTestClient struct {
+	roomID, participantID, sessionID string
+	grantID, bindingID               protocol.Bytes16
+	secret, key                      protocol.Bytes32
+	endpoint                         netip.AddrPort
+}
+
+func newRelayStoreFixture(t *testing.T, limits Limits) *relayStoreFixture {
+	t.Helper()
+	clock := &manualClock{reading: ClockReading{Wall: testWall, Mono: 0}}
+	random := &sequenceReader{}
+	return &relayStoreFixture{store: newTestStore(t, limits, clock, random), clock: clock, random: random}
+}
+
+func (fixture *relayStoreFixture) setMono(now time.Duration) {
+	fixture.clock.reading = ClockReading{Wall: testWall.Add(now), Mono: now}
+}
+
+func (fixture *relayStoreFixture) addBoundRoom(t *testing.T, roomID string, participants int, network byte) []boundTestClient {
+	t.Helper()
+	definition := RoomDefinition{
+		Capacity:     uint32(participants),
+		ExpiresAt:    testWall.Add(time.Hour),
+		Participants: make([]ParticipantDefinition, participants),
+	}
+	for index := range definition.Participants {
+		suffix := string(rune('a' + index))
+		definition.Participants[index] = ParticipantDefinition{
+			ParticipantID:  roomID + "-participant-" + suffix,
+			SessionID:      roomID + "-session-" + suffix,
+			GrantExpiresAt: testWall.Add(30 * time.Minute),
+		}
+	}
+	allocation, created, err := fixture.store.CreateRoom(roomID, definition)
+	if err != nil || !created {
+		t.Fatalf("CreateRoom(%s) = (_, %t, %v)", roomID, created, err)
+	}
+	clients := make([]boundTestClient, participants)
+	for index, grant := range allocation.Grants {
+		endpoint := netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 18, network, byte(index + 1)}), uint16(4000+index))
+		nonce := bytes16(byte(0x40 + index))
+		challenge, reason := fixture.store.BeginChallenge(ChallengeRequest{
+			RoomID: roomID, SessionID: grant.SessionID, GrantID: grant.GrantID,
+			ClientNonce: nonce, Endpoint: endpoint, InputBytes: 300,
+		})
+		if reason != RejectNone {
+			t.Fatalf("BeginChallenge(%s/%d): %q", roomID, index, reason)
+		}
+		secret := *grant.GrantSecret
+		authTag := protocol.AuthTag(secret, protocol.Revision, roomID, grant.SessionID, grant.GrantID,
+			challenge.CandidateID, nonce, challenge.ServerNonce)
+		bound, reason := fixture.store.Authenticate(AuthenticateRequest{
+			RoomID: roomID, SessionID: grant.SessionID, CandidateID: challenge.CandidateID,
+			Endpoint: endpoint, AuthTag: authTag, InputBytes: 100,
+		})
+		if reason != RejectNone {
+			t.Fatalf("Authenticate(%s/%d): %q", roomID, index, reason)
+		}
+		clients[index] = boundTestClient{
+			roomID: roomID, participantID: grant.ParticipantID, sessionID: grant.SessionID,
+			grantID: grant.GrantID, bindingID: bound.BindingID, secret: secret, endpoint: endpoint,
+			key: protocol.BindingKey(secret, protocol.Revision, roomID, grant.SessionID, grant.GrantID,
+				challenge.CandidateID, nonce, challenge.ServerNonce),
+		}
+	}
+	return clients
+}
+
+func (fixture *relayStoreFixture) rebind(t *testing.T, client *boundTestClient, endpoint netip.AddrPort) {
+	t.Helper()
+	nonce := bytes16(0xe1)
+	challenge, reason := fixture.store.BeginChallenge(ChallengeRequest{
+		RoomID: client.roomID, SessionID: client.sessionID, GrantID: client.grantID,
+		ClientNonce: nonce, Endpoint: endpoint, InputBytes: 300,
+	})
+	if reason != RejectNone {
+		t.Fatalf("rebind BeginChallenge(): %q", reason)
+	}
+	tag := protocol.AuthTag(client.secret, protocol.Revision, client.roomID, client.sessionID, client.grantID,
+		challenge.CandidateID, nonce, challenge.ServerNonce)
+	bound, reason := fixture.store.Authenticate(AuthenticateRequest{
+		RoomID: client.roomID, SessionID: client.sessionID, CandidateID: challenge.CandidateID,
+		Endpoint: endpoint, AuthTag: tag, InputBytes: 100,
+	})
+	if reason != RejectNone {
+		t.Fatalf("rebind Authenticate(): %q", reason)
+	}
+	client.bindingID = bound.BindingID
+	client.endpoint = endpoint
+	client.key = protocol.BindingKey(client.secret, protocol.Revision, client.roomID, client.sessionID, client.grantID,
+		challenge.CandidateID, nonce, challenge.ServerNonce)
+}
+
+func (client boundTestClient) dataRequest(sequence uint64, payload []byte) ClientDataRequest {
+	payload = append([]byte(nil), payload...)
+	return ClientDataRequest{
+		RoomID: client.roomID, SessionID: client.sessionID, BindingID: client.bindingID,
+		Sequence: sequence, Payload: payload, Endpoint: client.endpoint,
+		AuthTag: protocol.ClientDataTag(client.key, protocol.Revision, client.roomID, client.sessionID,
+			client.bindingID, sequence, payload),
+	}
+}
+
+func (client boundTestClient) pingRequest(sequence uint64) PingRequest {
+	return PingRequest{
+		RoomID: client.roomID, SessionID: client.sessionID, BindingID: client.bindingID,
+		Sequence: sequence, Endpoint: client.endpoint,
+		AuthTag: protocol.PingTag(client.key, protocol.Revision, client.roomID, client.sessionID,
+			client.bindingID, sequence),
+	}
+}
+
+type authenticatedBalances struct {
+	sessionPackets, sessionBytes, roomPackets, roomBytes, globalPackets, globalBytes float64
+}
+
+func authenticatedBalancesAt(store *Store, grant *grantRecord, now time.Time) authenticatedBalances {
+	room := store.roomsByID[grant.roomID]
+	return authenticatedBalances{
+		grant.ingressPackets.TokensAt(now), grant.ingressBytes.TokensAt(now),
+		room.ingressPackets.TokensAt(now), room.ingressBytes.TokensAt(now),
+		store.authenticatedGlobalPackets.TokensAt(now), store.authenticatedGlobalBytes.TokensAt(now),
+	}
+}
+
+type fanoutBalances struct {
+	roomWrites, roomBytes, globalWrites, globalBytes float64
+}
+
+func fanoutBalancesAt(store *Store, room *roomRecord, now time.Time) fanoutBalances {
+	return fanoutBalances{
+		room.fanoutWrites.TokensAt(now), room.fanoutBytes.TokensAt(now),
+		store.globalFanoutWrites.TokensAt(now), store.globalFanoutBytes.TokensAt(now),
+	}
 }

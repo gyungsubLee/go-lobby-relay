@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -18,50 +19,90 @@ var testWall = time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
 
 func TestDefaultLimitsAndHardMaxima(t *testing.T) {
 	want := Limits{
-		MaxOpenRooms:             256,
-		MaxRoomRecords:           4096,
-		MaxRoomCapacity:          16,
-		MaxActiveSessions:        4096,
-		MaxRoomTTL:               2 * time.Hour,
-		MaxGrantTTL:              2 * time.Hour,
-		SweepInterval:            time.Second,
-		EmptyGrace:               5 * time.Second,
-		TombstoneTTL:             60 * time.Second,
-		ChallengeTTL:             3 * time.Second,
-		BindingTTL:               60 * time.Second,
-		PreauthSourcePacketRate:  16,
-		PreauthSourcePacketBurst: 160,
-		PreauthSourceByteRate:    19_200,
-		PreauthSourceByteBurst:   192_000,
-		PreauthGlobalPacketRate:  128,
-		PreauthGlobalPacketBurst: 1_280,
-		PreauthGlobalByteRate:    153_600,
-		PreauthGlobalByteBurst:   1_536_000,
+		MaxOpenRooms:                   256,
+		MaxRoomRecords:                 4096,
+		MaxRoomCapacity:                16,
+		MaxActiveSessions:              4096,
+		MaxRoomTTL:                     2 * time.Hour,
+		MaxGrantTTL:                    2 * time.Hour,
+		SweepInterval:                  time.Second,
+		EmptyGrace:                     5 * time.Second,
+		TombstoneTTL:                   60 * time.Second,
+		ChallengeTTL:                   3 * time.Second,
+		BindingTTL:                     60 * time.Second,
+		PreauthSourcePacketRate:        16,
+		PreauthSourcePacketBurst:       160,
+		PreauthSourceByteRate:          19_200,
+		PreauthSourceByteBurst:         192_000,
+		PreauthGlobalPacketRate:        128,
+		PreauthGlobalPacketBurst:       1_280,
+		PreauthGlobalByteRate:          153_600,
+		PreauthGlobalByteBurst:         1_536_000,
+		SessionPacketRate:              40,
+		SessionPacketBurst:             40,
+		SessionByteRate:                20_480,
+		SessionByteBurst:               20_480,
+		RoomPacketRate:                 160,
+		RoomPacketBurst:                160,
+		RoomByteRate:                   81_920,
+		RoomByteBurst:                  81_920,
+		AuthenticatedGlobalPacketRate:  1_280,
+		AuthenticatedGlobalPacketBurst: 1_280,
+		AuthenticatedGlobalByteRate:    655_360,
+		AuthenticatedGlobalByteBurst:   655_360,
+		RoomFanoutWriteRate:            480,
+		RoomFanoutWriteBurst:           480,
+		RoomFanoutByteRate:             245_760,
+		RoomFanoutByteBurst:            245_760,
+		GlobalFanoutWriteRate:          3_840,
+		GlobalFanoutWriteBurst:         3_840,
+		GlobalFanoutByteRate:           1_966_080,
+		GlobalFanoutByteBurst:          1_966_080,
 	}
 	if got := DefaultLimits(); got != want {
 		t.Fatalf("DefaultLimits() = %#v, want %#v", got, want)
 	}
 
 	hard := Limits{
-		MaxOpenRooms:             HardMaxOpenRooms,
-		MaxRoomRecords:           HardMaxRoomRecords,
-		MaxRoomCapacity:          HardMaxRoomCapacity,
-		MaxActiveSessions:        HardMaxActiveSessions,
-		MaxRoomTTL:               HardMaxRoomTTL,
-		MaxGrantTTL:              HardMaxGrantTTL,
-		SweepInterval:            HardMaxSweepInterval,
-		EmptyGrace:               HardMaxEmptyGrace,
-		TombstoneTTL:             HardMaxTombstoneTTL,
-		ChallengeTTL:             HardMaxChallengeTTL,
-		BindingTTL:               HardMaxBindingTTL,
-		PreauthSourcePacketRate:  HardMaxPreauthSourcePacketRate,
-		PreauthSourcePacketBurst: HardMaxPreauthSourcePacketBurst,
-		PreauthSourceByteRate:    HardMaxPreauthSourceByteRate,
-		PreauthSourceByteBurst:   HardMaxPreauthSourceByteBurst,
-		PreauthGlobalPacketRate:  HardMaxPreauthGlobalPacketRate,
-		PreauthGlobalPacketBurst: HardMaxPreauthGlobalPacketBurst,
-		PreauthGlobalByteRate:    HardMaxPreauthGlobalByteRate,
-		PreauthGlobalByteBurst:   HardMaxPreauthGlobalByteBurst,
+		MaxOpenRooms:                   HardMaxOpenRooms,
+		MaxRoomRecords:                 HardMaxRoomRecords,
+		MaxRoomCapacity:                HardMaxRoomCapacity,
+		MaxActiveSessions:              HardMaxActiveSessions,
+		MaxRoomTTL:                     HardMaxRoomTTL,
+		MaxGrantTTL:                    HardMaxGrantTTL,
+		SweepInterval:                  HardMaxSweepInterval,
+		EmptyGrace:                     HardMaxEmptyGrace,
+		TombstoneTTL:                   HardMaxTombstoneTTL,
+		ChallengeTTL:                   HardMaxChallengeTTL,
+		BindingTTL:                     HardMaxBindingTTL,
+		PreauthSourcePacketRate:        HardMaxPreauthSourcePacketRate,
+		PreauthSourcePacketBurst:       HardMaxPreauthSourcePacketBurst,
+		PreauthSourceByteRate:          HardMaxPreauthSourceByteRate,
+		PreauthSourceByteBurst:         HardMaxPreauthSourceByteBurst,
+		PreauthGlobalPacketRate:        HardMaxPreauthGlobalPacketRate,
+		PreauthGlobalPacketBurst:       HardMaxPreauthGlobalPacketBurst,
+		PreauthGlobalByteRate:          HardMaxPreauthGlobalByteRate,
+		PreauthGlobalByteBurst:         HardMaxPreauthGlobalByteBurst,
+		SessionPacketRate:              HardMaxSessionPacketRate,
+		SessionPacketBurst:             HardMaxSessionPacketBurst,
+		SessionByteRate:                HardMaxSessionByteRate,
+		SessionByteBurst:               HardMaxSessionByteBurst,
+		RoomPacketRate:                 HardMaxRoomPacketRate,
+		RoomPacketBurst:                HardMaxRoomPacketBurst,
+		RoomByteRate:                   HardMaxRoomByteRate,
+		RoomByteBurst:                  HardMaxRoomByteBurst,
+		AuthenticatedGlobalPacketRate:  HardMaxAuthenticatedGlobalPacketRate,
+		AuthenticatedGlobalPacketBurst: HardMaxAuthenticatedGlobalPacketBurst,
+		AuthenticatedGlobalByteRate:    HardMaxAuthenticatedGlobalByteRate,
+		AuthenticatedGlobalByteBurst:   HardMaxAuthenticatedGlobalByteBurst,
+		RoomFanoutWriteRate:            HardMaxRoomFanoutWriteRate,
+		RoomFanoutWriteBurst:           HardMaxRoomFanoutWriteBurst,
+		RoomFanoutByteRate:             HardMaxRoomFanoutByteRate,
+		RoomFanoutByteBurst:            HardMaxRoomFanoutByteBurst,
+		GlobalFanoutWriteRate:          HardMaxGlobalFanoutWriteRate,
+		GlobalFanoutWriteBurst:         HardMaxGlobalFanoutWriteBurst,
+		GlobalFanoutByteRate:           HardMaxGlobalFanoutByteRate,
+		GlobalFanoutByteBurst:          HardMaxGlobalFanoutByteBurst,
 	}
 	if hard != want {
 		t.Fatalf("hard maxima = %#v, want %#v", hard, want)
@@ -1168,6 +1209,8 @@ func TestLifecycleChurnReturnsAllStateToBaseline(t *testing.T) {
 	clock := &manualClock{}
 	random := &sequenceReader{}
 	store := newTestStore(t, limits, clock, random)
+	globalIngressPackets, globalIngressBytes := store.authenticatedGlobalPackets, store.authenticatedGlobalBytes
+	globalFanoutWrites, globalFanoutBytes := store.globalFanoutWrites, store.globalFanoutBytes
 	for index := range 1000 {
 		base := time.Duration(index) * (limits.TombstoneTTL + 2*time.Nanosecond)
 		clock.reading = ClockReading{Wall: testWall.Add(base), Mono: base}
@@ -1184,11 +1227,61 @@ func TestLifecycleChurnReturnsAllStateToBaseline(t *testing.T) {
 		if err != nil || !created || allocation.Grants[0].GrantSecret == nil {
 			t.Fatalf("cycle %d CreateRoom() = (_, %t, %v)", index, created, err)
 		}
+		endpoint := netip.MustParseAddrPort("192.0.2.1:4000")
+		nonce := bytes16(byte(index))
+		challenge, reason := store.BeginChallenge(ChallengeRequest{
+			RoomID: "room", SessionID: allocation.Grants[0].SessionID, GrantID: allocation.Grants[0].GrantID,
+			ClientNonce: nonce, Endpoint: endpoint, InputBytes: 300,
+		})
+		if reason != RejectNone {
+			t.Fatalf("cycle %d BeginChallenge() = %q", index, reason)
+		}
+		secret := *allocation.Grants[0].GrantSecret
+		authTag := protocol.AuthTag(secret, protocol.Revision, "room", allocation.Grants[0].SessionID,
+			allocation.Grants[0].GrantID, challenge.CandidateID, nonce, challenge.ServerNonce)
+		bound, reason := store.Authenticate(AuthenticateRequest{
+			RoomID: "room", SessionID: allocation.Grants[0].SessionID, CandidateID: challenge.CandidateID,
+			Endpoint: endpoint, AuthTag: authTag, InputBytes: 100,
+		})
+		if reason != RejectNone {
+			t.Fatalf("cycle %d Authenticate() = %q", index, reason)
+		}
+		grant := store.bindingsByID[bound.BindingID]
+		room := store.roomsByID["room"]
+		key := grant.binding.key
+		request := ClientDataRequest{
+			RoomID: "room", SessionID: allocation.Grants[0].SessionID, BindingID: bound.BindingID,
+			Sequence: 1, Endpoint: endpoint,
+		}
+		request.AuthTag = protocol.ClientDataTag(key, protocol.Revision, request.RoomID, request.SessionID,
+			request.BindingID, request.Sequence, request.Payload)
+		admitted, reason := store.AdmitClientIngress(request, 1)
+		if reason != RejectNone {
+			t.Fatalf("cycle %d AdmitClientIngress() = %q", index, reason)
+		}
+		plan, reason := store.AdmitFanout(admitted, 1)
+		if reason != RejectNone || len(plan.Recipients) != 0 {
+			t.Fatalf("cycle %d AdmitFanout() = (%#v, %q)", index, plan, reason)
+		}
 		clock.reading.Mono += time.Nanosecond
 		store.Expire()
+		if grant.ingressPackets != nil || grant.ingressBytes != nil || room.ingressPackets != nil ||
+			room.ingressBytes != nil || room.fanoutWrites != nil || room.fanoutBytes != nil {
+			t.Fatalf("cycle %d terminal cleanup retained limiter state", index)
+		}
 		clock.reading.Mono += limits.TombstoneTTL
 		store.Expire()
 		assertStoreCounts(t, store, 0, 0, 0, 0)
+		if len(store.preauthSources) != 0 {
+			t.Fatalf("cycle %d retained %d preauth sources", index, len(store.preauthSources))
+		}
+	}
+	if store.authenticatedGlobalPackets != globalIngressPackets || store.authenticatedGlobalBytes != globalIngressBytes ||
+		store.globalFanoutWrites != globalFanoutWrites || store.globalFanoutBytes != globalFanoutBytes {
+		t.Fatal("lifecycle churn replaced process-global limiter state")
+	}
+	if len(store.preauthSources) != 0 {
+		t.Fatalf("lifecycle churn retained %d preauth sources", len(store.preauthSources))
 	}
 	assertStoreInvariants(t, store)
 }
@@ -1471,7 +1564,8 @@ func assertTombstoneOnly(t *testing.T, store *Store, roomID string, deadline tim
 		t.Fatalf("room %q is absent, want tombstone", roomID)
 	}
 	if record.state != roomStateTombstone || record.tombstoneDeadline != deadline || record.capacity != 0 ||
-		!record.createdAt.IsZero() || !record.expiresAt.IsZero() || record.monoDeadline != 0 || record.grants != nil {
+		!record.createdAt.IsZero() || !record.expiresAt.IsZero() || record.monoDeadline != 0 || record.grants != nil ||
+		record.ingressPackets != nil || record.ingressBytes != nil || record.fanoutWrites != nil || record.fanoutBytes != nil {
 		t.Fatalf("room %q retained non-tombstone state: %#v, want deadline %v", roomID, record, deadline)
 	}
 }
@@ -1495,12 +1589,16 @@ func assertStoreInvariants(t *testing.T, store *Store) {
 		case roomStateEmpty:
 		case roomStateTombstone:
 			if room.tombstoneDeadline == 0 || room.capacity != 0 || !room.createdAt.IsZero() ||
-				!room.expiresAt.IsZero() || room.monoDeadline != 0 || room.grants != nil {
+				!room.expiresAt.IsZero() || room.monoDeadline != 0 || room.grants != nil ||
+				room.ingressPackets != nil || room.ingressBytes != nil || room.fanoutWrites != nil || room.fanoutBytes != nil {
 				t.Fatalf("tombstone %q retained room/grant data: %#v", roomID, room)
 			}
 			continue
 		default:
 			t.Fatalf("room %q has invalid state %v", roomID, room.state)
+		}
+		if room.ingressPackets == nil || room.ingressBytes == nil || room.fanoutWrites == nil || room.fanoutBytes == nil {
+			t.Fatalf("live room %q has incomplete limiter state", roomID)
 		}
 		for _, grant := range room.grants {
 			if grant == nil {
@@ -1509,13 +1607,13 @@ func assertStoreInvariants(t *testing.T, store *Store) {
 			switch grant.state {
 			case GrantStateIssued, GrantStateBound:
 				activeSessions++
-				if grant.secret == nil {
-					t.Fatalf("live grant %x has no secret", grant.id)
+				if grant.secret == nil || grant.ingressPackets == nil || grant.ingressBytes == nil {
+					t.Fatalf("live grant %x has incomplete secret/limiter state", grant.id)
 				}
 				indexed[grant.id] = grant
 			case GrantStateExpired, GrantStateRevoked:
-				if grant.secret != nil {
-					t.Fatalf("terminal grant %x retained a secret", grant.id)
+				if grant.secret != nil || grant.ingressPackets != nil || grant.ingressBytes != nil {
+					t.Fatalf("terminal grant %x retained secret/limiter state", grant.id)
 				}
 				if _, exists := store.grantsByID[grant.id]; exists {
 					t.Fatalf("terminal grant %x retained reverse index", grant.id)
@@ -1574,7 +1672,9 @@ func assertStoreInvariants(t *testing.T, store *Store) {
 			t.Fatalf("binding index %x points outside authoritative grants", bindingID)
 		}
 	}
-	if len(store.preauthSources) > HardMaxPreauthSources || store.preauthGlobalPackets == nil || store.preauthGlobalBytes == nil {
+	if len(store.preauthSources) > HardMaxPreauthSources || store.preauthGlobalPackets == nil || store.preauthGlobalBytes == nil ||
+		store.authenticatedGlobalPackets == nil || store.authenticatedGlobalBytes == nil ||
+		store.globalFanoutWrites == nil || store.globalFanoutBytes == nil {
 		t.Fatalf("invalid pre-auth state: sources=%d packet=%p bytes=%p", len(store.preauthSources), store.preauthGlobalPackets, store.preauthGlobalBytes)
 	}
 	for key, source := range store.preauthSources {

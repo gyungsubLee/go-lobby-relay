@@ -2,6 +2,7 @@ package store
 
 import (
 	"io"
+	"math"
 	"net/netip"
 	"time"
 
@@ -63,6 +64,45 @@ type BoundResult struct {
 	BindingID     protocol.Bytes16
 	ExpiresUnixMS int64
 	AuthTag       protocol.Bytes32
+}
+
+type ClientDataRequest struct {
+	RoomID, SessionID string
+	BindingID         protocol.Bytes16
+	Sequence          uint64
+	Payload           []byte
+	Endpoint          netip.AddrPort
+	AuthTag           protocol.Bytes32
+}
+
+type PingRequest struct {
+	RoomID, SessionID string
+	BindingID         protocol.Bytes16
+	Sequence          uint64
+	Endpoint          netip.AddrPort
+	AuthTag           protocol.Bytes32
+}
+
+type AdmittedClientData struct {
+	store               *Store
+	roomID              string
+	sessionID           string
+	senderParticipantID string
+	bindingID           protocol.Bytes16
+	bindingGeneration   uint64
+	sequence            uint64
+}
+
+func (admitted AdmittedClientData) RoomID() string              { return admitted.roomID }
+func (admitted AdmittedClientData) SessionID() string           { return admitted.sessionID }
+func (admitted AdmittedClientData) SenderParticipantID() string { return admitted.senderParticipantID }
+func (admitted AdmittedClientData) Sequence() uint64            { return admitted.sequence }
+
+type RelayPlan struct {
+	RoomID, SessionID   string
+	SenderParticipantID string
+	Sequence            uint64
+	Recipients          []netip.AddrPort
 }
 
 type replayWindow struct {
@@ -138,6 +178,190 @@ func (store *Store) AdmitPreauth(request PreauthRequest) RejectReason {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	return store.admitPreauthLocked(request.Endpoint, request.InputBytes, store.now().Mono)
+}
+
+func (store *Store) AdmitClientIngress(request ClientDataRequest, inputBytes int) (AdmittedClientData, RejectReason) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	reading := store.now()
+	grant, binding, reason := store.admitAuthenticatedLocked(
+		request.RoomID, request.SessionID, request.BindingID, request.Sequence, request.Endpoint,
+		request.AuthTag, inputBytes, reading.Mono,
+		func(key protocol.Bytes32) protocol.Bytes32 {
+			return protocol.ClientDataTag(key, protocol.Revision, request.RoomID, request.SessionID,
+				request.BindingID, request.Sequence, request.Payload)
+		},
+	)
+	if reason != RejectNone {
+		return AdmittedClientData{}, reason
+	}
+	return AdmittedClientData{
+		store: store, roomID: grant.roomID, sessionID: grant.sessionID,
+		senderParticipantID: grant.participantID, bindingID: binding.id,
+		bindingGeneration: binding.generation, sequence: request.Sequence,
+	}, RejectNone
+}
+
+func (store *Store) AdmitPing(request PingRequest, inputBytes int) RejectReason {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	reading := store.now()
+	_, _, reason := store.admitAuthenticatedLocked(
+		request.RoomID, request.SessionID, request.BindingID, request.Sequence, request.Endpoint,
+		request.AuthTag, inputBytes, reading.Mono,
+		func(key protocol.Bytes32) protocol.Bytes32 {
+			return protocol.PingTag(key, protocol.Revision, request.RoomID, request.SessionID,
+				request.BindingID, request.Sequence)
+		},
+	)
+	return reason
+}
+
+func (store *Store) AdmitFanout(admitted AdmittedClientData, outputBytes int) (RelayPlan, RejectReason) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if admitted.store != store {
+		return RelayPlan{}, RejectNotBound
+	}
+	reading := store.now()
+	grant := store.bindingsByID[admitted.bindingID]
+	if grant == nil || grant.binding == nil || grant.binding.id != admitted.bindingID ||
+		grant.binding.generation != admitted.bindingGeneration || grant.roomID != admitted.roomID ||
+		grant.sessionID != admitted.sessionID || grant.participantID != admitted.senderParticipantID {
+		return RelayPlan{}, RejectNotBound
+	}
+	room, reason := store.liveAuthority(grant, reading.Mono)
+	if reason != RejectNone {
+		return RelayPlan{}, reason
+	}
+	binding := grant.binding
+	if binding == nil || reading.Mono >= binding.deadline {
+		store.clearBinding(grant)
+		return RelayPlan{}, RejectExpired
+	}
+	if outputBytes < 0 || outputBytes > protocol.MaxDatagramBytes {
+		return RelayPlan{}, RejectOversized
+	}
+
+	recipients := make([]netip.AddrPort, 0, len(room.grants)-1)
+	for _, recipient := range room.grants {
+		if recipient == grant || !grantLive(recipient) {
+			continue
+		}
+		if reading.Mono >= recipient.monoDeadline {
+			store.terminalGrant(recipient, GrantStateExpired)
+			continue
+		}
+		store.expireRelay(recipient, reading.Mono)
+		if recipient.binding != nil {
+			recipients = append(recipients, recipient.binding.endpoint)
+		}
+	}
+	plan := RelayPlan{
+		RoomID: grant.roomID, SessionID: grant.sessionID, SenderParticipantID: grant.participantID,
+		Sequence: admitted.sequence, Recipients: recipients,
+	}
+	if len(recipients) == 0 {
+		return plan, RejectNone
+	}
+	if outputBytes > math.MaxInt/len(recipients) {
+		return RelayPlan{}, RejectOversized
+	}
+	plannedBytes := outputBytes * len(recipients)
+	if !allowAtomic(limiterTime(reading.Mono),
+		limiterCharge{room.fanoutWrites, len(recipients)},
+		limiterCharge{room.fanoutBytes, plannedBytes},
+		limiterCharge{store.globalFanoutWrites, len(recipients)},
+		limiterCharge{store.globalFanoutBytes, plannedBytes},
+	) {
+		return RelayPlan{}, RejectFanoutLimited
+	}
+	return plan, RejectNone
+}
+
+func (store *Store) admitAuthenticatedLocked(
+	roomID, sessionID string,
+	bindingID protocol.Bytes16,
+	sequence uint64,
+	endpoint netip.AddrPort,
+	authTag protocol.Bytes32,
+	inputBytes int,
+	now time.Duration,
+	expectedTag func(protocol.Bytes32) protocol.Bytes32,
+) (*grantRecord, *bindingRecord, RejectReason) {
+	rejectPreauth := func(reason RejectReason) RejectReason {
+		if store.admitPreauthLocked(endpoint, inputBytes, now) != RejectNone {
+			return RejectRateLimited
+		}
+		return reason
+	}
+	if sequence == 0 || inputBytes < 0 {
+		return nil, nil, rejectPreauth(RejectMalformed)
+	}
+	grant := store.bindingsByID[bindingID]
+	if grant == nil || grant.binding == nil || grant.binding.id != bindingID {
+		return nil, nil, rejectPreauth(RejectNotBound)
+	}
+	if grant.state == GrantStateRevoked {
+		return nil, nil, rejectPreauth(RejectRevoked)
+	}
+	if grant.state == GrantStateExpired {
+		return nil, nil, rejectPreauth(RejectExpired)
+	}
+	room := store.roomsByID[grant.roomID]
+	if room == nil || room.state != roomStateOpen {
+		return nil, nil, rejectPreauth(RejectRevoked)
+	}
+	if now >= room.monoDeadline {
+		reason := rejectPreauth(RejectExpired)
+		if reason == RejectExpired {
+			store.tombstoneRoom(room, now, GrantStateExpired)
+		}
+		return nil, nil, reason
+	}
+	if now >= grant.monoDeadline {
+		reason := rejectPreauth(RejectExpired)
+		if reason == RejectExpired {
+			store.terminalGrant(grant, GrantStateExpired)
+		}
+		return nil, nil, reason
+	}
+	if roomID != grant.roomID {
+		return nil, nil, rejectPreauth(RejectWrongRoom)
+	}
+	if sessionID != grant.sessionID {
+		return nil, nil, rejectPreauth(RejectAuthFailed)
+	}
+	binding := grant.binding
+	if binding == nil || binding.id != bindingID {
+		return nil, nil, rejectPreauth(RejectNotBound)
+	}
+	if now >= binding.deadline {
+		reason := rejectPreauth(RejectExpired)
+		if reason == RejectExpired {
+			store.clearBinding(grant)
+		}
+		return nil, nil, reason
+	}
+	if !endpoint.IsValid() || binding.endpoint != endpoint {
+		return nil, nil, rejectPreauth(RejectWrongEndpoint)
+	}
+	if !protocol.EqualTag(expectedTag(binding.key), authTag[:]) {
+		return nil, nil, rejectPreauth(RejectAuthFailed)
+	}
+
+	fresh := binding.replay.accept(sequence)
+	if !allowAtomic(limiterTime(now),
+		limiterCharge{grant.ingressPackets, 1}, limiterCharge{grant.ingressBytes, inputBytes},
+		limiterCharge{room.ingressPackets, 1}, limiterCharge{room.ingressBytes, inputBytes},
+		limiterCharge{store.authenticatedGlobalPackets, 1}, limiterCharge{store.authenticatedGlobalBytes, inputBytes},
+	) {
+		return nil, nil, RejectRateLimited
+	}
+	if !fresh {
+		return nil, nil, RejectReplay
+	}
+	return grant, binding, RejectNone
 }
 
 func (store *Store) BeginChallenge(request ChallengeRequest) (ChallengeResult, RejectReason) {
