@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/gyungsubLee/go-game-relay/internal/protocol"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -23,6 +25,18 @@ const (
 	HardMaxSweepInterval  = time.Second
 	HardMaxEmptyGrace     = 5 * time.Second
 	HardMaxTombstoneTTL   = 60 * time.Second
+	HardMaxChallengeTTL   = 3 * time.Second
+	HardMaxBindingTTL     = 60 * time.Second
+	HardMaxPreauthSources = 4096
+
+	HardMaxPreauthSourcePacketRate  rate.Limit = 16
+	HardMaxPreauthSourcePacketBurst            = 160
+	HardMaxPreauthSourceByteRate    rate.Limit = 19_200
+	HardMaxPreauthSourceByteBurst              = 192_000
+	HardMaxPreauthGlobalPacketRate  rate.Limit = 128
+	HardMaxPreauthGlobalPacketBurst            = 1_280
+	HardMaxPreauthGlobalByteRate    rate.Limit = 153_600
+	HardMaxPreauthGlobalByteBurst              = 1_536_000
 )
 
 var (
@@ -43,19 +57,40 @@ type Limits struct {
 	SweepInterval     time.Duration
 	EmptyGrace        time.Duration
 	TombstoneTTL      time.Duration
+	ChallengeTTL      time.Duration
+	BindingTTL        time.Duration
+
+	PreauthSourcePacketRate  rate.Limit
+	PreauthSourcePacketBurst int
+	PreauthSourceByteRate    rate.Limit
+	PreauthSourceByteBurst   int
+	PreauthGlobalPacketRate  rate.Limit
+	PreauthGlobalPacketBurst int
+	PreauthGlobalByteRate    rate.Limit
+	PreauthGlobalByteBurst   int
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaxOpenRooms:      HardMaxOpenRooms,
-		MaxRoomRecords:    HardMaxRoomRecords,
-		MaxRoomCapacity:   HardMaxRoomCapacity,
-		MaxActiveSessions: HardMaxActiveSessions,
-		MaxRoomTTL:        HardMaxRoomTTL,
-		MaxGrantTTL:       HardMaxGrantTTL,
-		SweepInterval:     HardMaxSweepInterval,
-		EmptyGrace:        HardMaxEmptyGrace,
-		TombstoneTTL:      HardMaxTombstoneTTL,
+		MaxOpenRooms:             HardMaxOpenRooms,
+		MaxRoomRecords:           HardMaxRoomRecords,
+		MaxRoomCapacity:          HardMaxRoomCapacity,
+		MaxActiveSessions:        HardMaxActiveSessions,
+		MaxRoomTTL:               HardMaxRoomTTL,
+		MaxGrantTTL:              HardMaxGrantTTL,
+		SweepInterval:            HardMaxSweepInterval,
+		EmptyGrace:               HardMaxEmptyGrace,
+		TombstoneTTL:             HardMaxTombstoneTTL,
+		ChallengeTTL:             HardMaxChallengeTTL,
+		BindingTTL:               HardMaxBindingTTL,
+		PreauthSourcePacketRate:  HardMaxPreauthSourcePacketRate,
+		PreauthSourcePacketBurst: HardMaxPreauthSourcePacketBurst,
+		PreauthSourceByteRate:    HardMaxPreauthSourceByteRate,
+		PreauthSourceByteBurst:   HardMaxPreauthSourceByteBurst,
+		PreauthGlobalPacketRate:  HardMaxPreauthGlobalPacketRate,
+		PreauthGlobalPacketBurst: HardMaxPreauthGlobalPacketBurst,
+		PreauthGlobalByteRate:    HardMaxPreauthGlobalByteRate,
+		PreauthGlobalByteBurst:   HardMaxPreauthGlobalByteBurst,
 	}
 }
 
@@ -137,10 +172,15 @@ type Store struct {
 	now    func() ClockReading
 	random io.Reader
 
-	roomsByID      map[string]*roomRecord
-	grantsByID     map[protocol.Bytes16]*grantRecord
-	openRooms      int
-	activeSessions int
+	roomsByID            map[string]*roomRecord
+	grantsByID           map[protocol.Bytes16]*grantRecord
+	candidatesByID       map[protocol.Bytes16]*grantRecord
+	bindingsByID         map[protocol.Bytes16]*grantRecord
+	preauthSources       map[netip.Prefix]*preauthSource
+	preauthGlobalPackets *rate.Limiter
+	preauthGlobalBytes   *rate.Limiter
+	openRooms            int
+	activeSessions       int
 }
 
 type roomRecordState uint8
@@ -162,6 +202,7 @@ type roomRecord struct {
 }
 
 type grantRecord struct {
+	roomID        string
 	participantID string
 	sessionID     string
 	id            protocol.Bytes16
@@ -169,6 +210,11 @@ type grantRecord struct {
 	expiresAt     time.Time
 	monoDeadline  time.Duration
 	state         GrantState
+	bindingState  BindingState
+	generation    uint64
+	pending       *challengeRecord
+	recent        *completedHandshake
+	binding       *bindingRecord
 }
 
 func New(config Config) (*Store, error) {
@@ -190,11 +236,16 @@ func New(config Config) (*Store, error) {
 	}
 
 	return &Store{
-		limits:     config.Limits,
-		now:        now,
-		random:     random,
-		roomsByID:  make(map[string]*roomRecord),
-		grantsByID: make(map[protocol.Bytes16]*grantRecord),
+		limits:               config.Limits,
+		now:                  now,
+		random:               random,
+		roomsByID:            make(map[string]*roomRecord),
+		grantsByID:           make(map[protocol.Bytes16]*grantRecord),
+		candidatesByID:       make(map[protocol.Bytes16]*grantRecord),
+		bindingsByID:         make(map[protocol.Bytes16]*grantRecord),
+		preauthSources:       make(map[netip.Prefix]*preauthSource),
+		preauthGlobalPackets: rate.NewLimiter(config.Limits.PreauthGlobalPacketRate, config.Limits.PreauthGlobalPacketBurst),
+		preauthGlobalBytes:   rate.NewLimiter(config.Limits.PreauthGlobalByteRate, config.Limits.PreauthGlobalByteBurst),
 	}, nil
 }
 
@@ -261,6 +312,7 @@ func (store *Store) CreateRoom(roomID string, definition RoomDefinition) (Alloca
 		}
 		secretCopy := secret
 		grant := &grantRecord{
+			roomID:        roomID,
 			participantID: participant.ParticipantID,
 			sessionID:     participant.SessionID,
 			id:            grantID,
@@ -268,6 +320,7 @@ func (store *Store) CreateRoom(roomID string, definition RoomDefinition) (Alloca
 			expiresAt:     participant.GrantExpiresAt,
 			monoDeadline:  grantDeadlines[index],
 			state:         GrantStateIssued,
+			bindingState:  BindingStateUnbound,
 		}
 		grants[index] = grant
 		stagedIDs[grantID] = struct{}{}
@@ -338,6 +391,7 @@ func (store *Store) Expire() {
 		}
 
 		for _, grant := range room.grants {
+			store.expireRelay(grant, now)
 			if grantLive(grant) && now >= grant.monoDeadline {
 				store.terminalGrant(grant, GrantStateExpired)
 			}
@@ -357,6 +411,11 @@ func (store *Store) Expire() {
 		}
 		if now >= saturatingAdd(finalGrantDeadline, store.limits.EmptyGrace) {
 			store.tombstoneRoom(room, now, GrantStateExpired)
+		}
+	}
+	for key, source := range store.preauthSources {
+		if now >= saturatingAdd(source.lastObserved, preauthSourceIdleTTL) {
+			delete(store.preauthSources, key)
 		}
 	}
 }
@@ -479,10 +538,11 @@ func snapshotAt(roomID string, room *roomRecord, now time.Duration) RoomSnapshot
 	}
 	for index, grant := range room.grants {
 		state := grantStateAt(grant, now)
-		bindingState := BindingStateUnbound
+		bindingState := grant.bindingState
+		if bindingState == "" {
+			bindingState = BindingStateUnbound
+		}
 		switch state {
-		case GrantStateBound:
-			bindingState = BindingStateBound
 		case GrantStateExpired:
 			bindingState = BindingStateExpired
 		case GrantStateRevoked:
@@ -516,9 +576,15 @@ func (store *Store) tombstoneRoom(room *roomRecord, now time.Duration, terminalS
 }
 
 func (store *Store) terminalGrant(grant *grantRecord, terminalState GrantState) {
+	store.clearRelay(grant)
 	if grantLive(grant) {
 		store.activeSessions--
 		grant.state = terminalState
+		if terminalState == GrantStateRevoked {
+			grant.bindingState = BindingStateRevoked
+		} else {
+			grant.bindingState = BindingStateExpired
+		}
 	}
 	delete(store.grantsByID, grant.id)
 	if grant.secret != nil {
@@ -590,7 +656,21 @@ func validLimits(limits Limits) bool {
 		limits.SweepInterval > 0 && limits.SweepInterval <= HardMaxSweepInterval &&
 		limits.EmptyGrace > 0 && limits.EmptyGrace <= HardMaxEmptyGrace &&
 		limits.TombstoneTTL > 0 && limits.TombstoneTTL <= HardMaxTombstoneTTL &&
+		limits.ChallengeTTL > 0 && limits.ChallengeTTL <= HardMaxChallengeTTL &&
+		limits.BindingTTL > 0 && limits.BindingTTL <= HardMaxBindingTTL &&
+		validRate(limits.PreauthSourcePacketRate, HardMaxPreauthSourcePacketRate) &&
+		limits.PreauthSourcePacketBurst > 0 && limits.PreauthSourcePacketBurst <= HardMaxPreauthSourcePacketBurst &&
+		validRate(limits.PreauthSourceByteRate, HardMaxPreauthSourceByteRate) &&
+		limits.PreauthSourceByteBurst > 0 && limits.PreauthSourceByteBurst <= HardMaxPreauthSourceByteBurst &&
+		validRate(limits.PreauthGlobalPacketRate, HardMaxPreauthGlobalPacketRate) &&
+		limits.PreauthGlobalPacketBurst > 0 && limits.PreauthGlobalPacketBurst <= HardMaxPreauthGlobalPacketBurst &&
+		validRate(limits.PreauthGlobalByteRate, HardMaxPreauthGlobalByteRate) &&
+		limits.PreauthGlobalByteBurst > 0 && limits.PreauthGlobalByteBurst <= HardMaxPreauthGlobalByteBurst &&
 		limits.MaxOpenRooms <= limits.MaxRoomRecords &&
 		limits.MaxRoomCapacity <= limits.MaxActiveSessions &&
 		limits.MaxGrantTTL <= limits.MaxRoomTTL
+}
+
+func validRate(value, maximum rate.Limit) bool {
+	return value > 0 && value <= maximum
 }

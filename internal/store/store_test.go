@@ -18,30 +18,50 @@ var testWall = time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
 
 func TestDefaultLimitsAndHardMaxima(t *testing.T) {
 	want := Limits{
-		MaxOpenRooms:      256,
-		MaxRoomRecords:    4096,
-		MaxRoomCapacity:   16,
-		MaxActiveSessions: 4096,
-		MaxRoomTTL:        2 * time.Hour,
-		MaxGrantTTL:       2 * time.Hour,
-		SweepInterval:     time.Second,
-		EmptyGrace:        5 * time.Second,
-		TombstoneTTL:      60 * time.Second,
+		MaxOpenRooms:             256,
+		MaxRoomRecords:           4096,
+		MaxRoomCapacity:          16,
+		MaxActiveSessions:        4096,
+		MaxRoomTTL:               2 * time.Hour,
+		MaxGrantTTL:              2 * time.Hour,
+		SweepInterval:            time.Second,
+		EmptyGrace:               5 * time.Second,
+		TombstoneTTL:             60 * time.Second,
+		ChallengeTTL:             3 * time.Second,
+		BindingTTL:               60 * time.Second,
+		PreauthSourcePacketRate:  16,
+		PreauthSourcePacketBurst: 160,
+		PreauthSourceByteRate:    19_200,
+		PreauthSourceByteBurst:   192_000,
+		PreauthGlobalPacketRate:  128,
+		PreauthGlobalPacketBurst: 1_280,
+		PreauthGlobalByteRate:    153_600,
+		PreauthGlobalByteBurst:   1_536_000,
 	}
 	if got := DefaultLimits(); got != want {
 		t.Fatalf("DefaultLimits() = %#v, want %#v", got, want)
 	}
 
 	hard := Limits{
-		MaxOpenRooms:      HardMaxOpenRooms,
-		MaxRoomRecords:    HardMaxRoomRecords,
-		MaxRoomCapacity:   HardMaxRoomCapacity,
-		MaxActiveSessions: HardMaxActiveSessions,
-		MaxRoomTTL:        HardMaxRoomTTL,
-		MaxGrantTTL:       HardMaxGrantTTL,
-		SweepInterval:     HardMaxSweepInterval,
-		EmptyGrace:        HardMaxEmptyGrace,
-		TombstoneTTL:      HardMaxTombstoneTTL,
+		MaxOpenRooms:             HardMaxOpenRooms,
+		MaxRoomRecords:           HardMaxRoomRecords,
+		MaxRoomCapacity:          HardMaxRoomCapacity,
+		MaxActiveSessions:        HardMaxActiveSessions,
+		MaxRoomTTL:               HardMaxRoomTTL,
+		MaxGrantTTL:              HardMaxGrantTTL,
+		SweepInterval:            HardMaxSweepInterval,
+		EmptyGrace:               HardMaxEmptyGrace,
+		TombstoneTTL:             HardMaxTombstoneTTL,
+		ChallengeTTL:             HardMaxChallengeTTL,
+		BindingTTL:               HardMaxBindingTTL,
+		PreauthSourcePacketRate:  HardMaxPreauthSourcePacketRate,
+		PreauthSourcePacketBurst: HardMaxPreauthSourcePacketBurst,
+		PreauthSourceByteRate:    HardMaxPreauthSourceByteRate,
+		PreauthSourceByteBurst:   HardMaxPreauthSourceByteBurst,
+		PreauthGlobalPacketRate:  HardMaxPreauthGlobalPacketRate,
+		PreauthGlobalPacketBurst: HardMaxPreauthGlobalPacketBurst,
+		PreauthGlobalByteRate:    HardMaxPreauthGlobalByteRate,
+		PreauthGlobalByteBurst:   HardMaxPreauthGlobalByteBurst,
 	}
 	if hard != want {
 		t.Fatalf("hard maxima = %#v, want %#v", hard, want)
@@ -89,6 +109,8 @@ func TestNewRejectsEveryInvalidLimit(t *testing.T) {
 		{"SweepInterval", HardMaxSweepInterval, func(l *Limits, value time.Duration) { l.SweepInterval = value }},
 		{"EmptyGrace", HardMaxEmptyGrace, func(l *Limits, value time.Duration) { l.EmptyGrace = value }},
 		{"TombstoneTTL", HardMaxTombstoneTTL, func(l *Limits, value time.Duration) { l.TombstoneTTL = value }},
+		{"ChallengeTTL", HardMaxChallengeTTL, func(l *Limits, value time.Duration) { l.ChallengeTTL = value }},
+		{"BindingTTL", HardMaxBindingTTL, func(l *Limits, value time.Duration) { l.BindingTTL = value }},
 	}
 	for _, field := range durationFields {
 		for _, value := range []time.Duration{0, -1, field.max + time.Nanosecond} {
@@ -1464,6 +1486,8 @@ func assertStoreInvariants(t *testing.T, store *Store) {
 	openRooms := 0
 	activeSessions := 0
 	indexed := make(map[protocol.Bytes16]*grantRecord)
+	indexedCandidates := make(map[protocol.Bytes16]*grantRecord)
+	indexedBindings := make(map[protocol.Bytes16]*grantRecord)
 	for roomID, room := range store.roomsByID {
 		switch room.state {
 		case roomStateOpen:
@@ -1499,15 +1523,64 @@ func assertStoreInvariants(t *testing.T, store *Store) {
 			default:
 				t.Fatalf("grant %x has invalid state %q", grant.id, grant.state)
 			}
+			if grant.pending != nil {
+				if grant.pending.candidateID == (protocol.Bytes16{}) || grant.pending.serverNonce == (protocol.Bytes32{}) ||
+					!grant.pending.endpoint.IsValid() || grant.pending.deadline == 0 || store.candidatesByID[grant.pending.candidateID] != grant {
+					t.Fatalf("grant %x has inconsistent pending challenge", grant.id)
+				}
+				indexedCandidates[grant.pending.candidateID] = grant
+			}
+			if grant.recent != nil {
+				if grant.recent.candidateID == (protocol.Bytes16{}) || grant.recent.serverNonce == (protocol.Bytes32{}) ||
+					!grant.recent.endpoint.IsValid() || grant.recent.deadline == 0 || store.candidatesByID[grant.recent.candidateID] != grant {
+					t.Fatalf("grant %x has inconsistent recent completion", grant.id)
+				}
+				indexedCandidates[grant.recent.candidateID] = grant
+			}
+			if grant.binding != nil {
+				if grant.binding.id == (protocol.Bytes16{}) || grant.binding.key == (protocol.Bytes32{}) ||
+					!grant.binding.endpoint.IsValid() || grant.binding.deadline == 0 || grant.binding.generation == 0 ||
+					store.bindingsByID[grant.binding.id] != grant || grant.state != GrantStateBound ||
+					(grant.bindingState != BindingStateBound && grant.bindingState != BindingStateRebindPending) {
+					t.Fatalf("grant %x has inconsistent current binding", grant.id)
+				}
+				indexedBindings[grant.binding.id] = grant
+			} else if grant.state == GrantStateBound {
+				t.Fatalf("bound grant %x has no current binding", grant.id)
+			}
+			if !grantLive(grant) && (grant.pending != nil || grant.recent != nil || grant.binding != nil) {
+				t.Fatalf("terminal grant %x retained relay state", grant.id)
+			}
 		}
 	}
-	if openRooms != store.openRooms || activeSessions != store.activeSessions || len(indexed) != len(store.grantsByID) {
-		t.Fatalf("recomputed counts = open:%d active:%d index:%d; stored = %d/%d/%d",
-			openRooms, activeSessions, len(indexed), store.openRooms, store.activeSessions, len(store.grantsByID))
+	if openRooms != store.openRooms || activeSessions != store.activeSessions || len(indexed) != len(store.grantsByID) ||
+		len(indexedCandidates) != len(store.candidatesByID) || len(indexedBindings) != len(store.bindingsByID) {
+		t.Fatalf("recomputed counts = open:%d active:%d grants:%d candidates:%d bindings:%d; stored = %d/%d/%d/%d/%d",
+			openRooms, activeSessions, len(indexed), len(indexedCandidates), len(indexedBindings),
+			store.openRooms, store.activeSessions, len(store.grantsByID), len(store.candidatesByID), len(store.bindingsByID))
 	}
 	for grantID, grant := range store.grantsByID {
 		if indexed[grantID] != grant {
 			t.Fatalf("reverse index %x points outside authoritative room grants", grantID)
+		}
+	}
+	for candidateID, grant := range store.candidatesByID {
+		if indexedCandidates[candidateID] != grant {
+			t.Fatalf("candidate index %x points outside authoritative grants", candidateID)
+		}
+	}
+	for bindingID, grant := range store.bindingsByID {
+		if indexedBindings[bindingID] != grant {
+			t.Fatalf("binding index %x points outside authoritative grants", bindingID)
+		}
+	}
+	if len(store.preauthSources) > HardMaxPreauthSources || store.preauthGlobalPackets == nil || store.preauthGlobalBytes == nil {
+		t.Fatalf("invalid pre-auth state: sources=%d packet=%p bytes=%p", len(store.preauthSources), store.preauthGlobalPackets, store.preauthGlobalBytes)
+	}
+	for key, source := range store.preauthSources {
+		if (key.Addr().Is4() && key.Bits() != 32) || (key.Addr().Is6() && key.Bits() != 64) ||
+			source == nil || source.packets == nil || source.bytes == nil {
+			t.Fatalf("invalid pre-auth source %v: %#v", key, source)
 		}
 	}
 }
