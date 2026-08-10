@@ -508,10 +508,7 @@ func allocationAt(roomID string, room *roomRecord, now time.Duration) Allocation
 		Grants:    make([]GrantAllocation, len(room.grants)),
 	}
 	for index, grant := range room.grants {
-		state := grant.state
-		if (state == GrantStateIssued || state == GrantStateBound) && now >= grant.monoDeadline {
-			state = GrantStateExpired
-		}
+		state := grantStateAt(grant, now)
 		allocationGrant := GrantAllocation{
 			ParticipantID:  grant.participantID,
 			SessionID:      grant.sessionID,
@@ -625,6 +622,9 @@ func grantLive(grant *grantRecord) bool {
 func grantStateAt(grant *grantRecord, now time.Duration) GrantState {
 	if grantLive(grant) && now >= grant.monoDeadline {
 		return GrantStateExpired
+	}
+	if grant.state == GrantStateBound && grant.binding != nil && now >= grant.binding.deadline {
+		return GrantStateIssued
 	}
 	return grant.state
 }

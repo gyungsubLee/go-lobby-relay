@@ -513,9 +513,6 @@ func (store *Store) clearBinding(grant *grantRecord) {
 	if grantLive(grant) {
 		grant.state = GrantStateIssued
 		grant.bindingState = BindingStateExpired
-		if grant.pending != nil {
-			grant.bindingState = BindingStateUnbound
-		}
 	}
 }
 

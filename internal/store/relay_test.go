@@ -601,6 +601,79 @@ func TestGetRoomProjectsBindingAndPendingDeadlinesBeforeSweep(t *testing.T) {
 	})
 }
 
+func TestIdempotentCreateRoomProjectsBindingDeadlineBeforeSweep(t *testing.T) {
+	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+	endpoint := netip.MustParseAddrPort("203.0.113.47:6000")
+	nonce := bytes16(0xe8)
+	fixture.random.reset(filled(0xe9, 16), filled(0xea, 32), filled(0xeb, 16))
+	challenge, _ := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, endpoint))
+	if _, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, endpoint)); reason != RejectNone {
+		t.Fatalf("Authenticate(): %q", reason)
+	}
+	definition := validDefinition(testWall, 1)
+	for _, tt := range []struct {
+		name string
+		at   time.Duration
+		want GrantState
+	}{
+		{name: "before", at: 60*time.Second - time.Nanosecond, want: GrantStateBound},
+		{name: "exact", at: 60 * time.Second, want: GrantStateIssued},
+		{name: "after", at: 60*time.Second + time.Nanosecond, want: GrantStateIssued},
+	} {
+		fixture.clock.reading = ClockReading{Wall: testWall.Add(tt.at), Mono: tt.at}
+		allocation, created, err := fixture.store.CreateRoom("room", definition)
+		if err != nil || created || allocation.Grants[0].State != tt.want || allocation.Grants[0].GrantSecret == nil {
+			t.Fatalf("CreateRoom(%s) = (%#v, %t, %v), want state %q with live secret", tt.name, allocation, created, err, tt.want)
+		}
+	}
+}
+
+func TestExpiredBindingRemainsExpiredWithLivePendingRebind(t *testing.T) {
+	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+	fixture.store.limits.BindingTTL = 2 * time.Second
+	oldEndpoint := netip.MustParseAddrPort("203.0.113.48:6000")
+	newEndpoint := netip.MustParseAddrPort("203.0.113.49:6000")
+	oldNonce, newNonce := bytes16(0xec), bytes16(0xed)
+	fixture.random.reset(filled(0xee, 16), filled(0xef, 32), filled(0xf0, 16))
+	oldChallenge, _ := fixture.store.BeginChallenge(fixture.challengeRequest(0, oldNonce, oldEndpoint))
+	oldBound, reason := fixture.store.Authenticate(fixture.authRequest(0, oldChallenge, oldNonce, oldEndpoint))
+	if reason != RejectNone {
+		t.Fatalf("old Authenticate(): %q", reason)
+	}
+	oldBinding := fixture.grant(0).binding
+
+	fixture.clock.reading = ClockReading{Wall: testWall.Add(time.Second), Mono: time.Second}
+	fixture.random.reset(filled(0xf1, 16), filled(0xf2, 32))
+	newChallenge, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, newNonce, newEndpoint))
+	if reason != RejectNone {
+		t.Fatalf("rebind BeginChallenge(): %q", reason)
+	}
+	pending := fixture.grant(0).pending
+	fixture.clock.reading = ClockReading{Wall: testWall.Add(2 * time.Second), Mono: 2 * time.Second}
+	before, err := fixture.store.GetRoom("room")
+	if err != nil || before.Participants[0].GrantState != GrantStateIssued || before.Participants[0].BindingState != BindingStateExpired {
+		t.Fatalf("pre-sweep snapshot = (%#v, %v), want issued/expired", before, err)
+	}
+	fixture.store.Expire()
+	after, err := fixture.store.GetRoom("room")
+	if err != nil || after.Participants[0].GrantState != GrantStateIssued || after.Participants[0].BindingState != BindingStateExpired {
+		t.Fatalf("post-sweep snapshot = (%#v, %v), want issued/expired", after, err)
+	}
+	if fixture.grant(0).pending != pending || fixture.store.candidatesByID[newChallenge.CandidateID] != fixture.grant(0) ||
+		fixture.grant(0).binding != nil || fixture.store.bindingsByID[oldBound.BindingID] != nil || oldBinding.key != (protocol.Bytes32{}) {
+		t.Fatal("binding expiry removed the live pending rebind or retained old authority")
+	}
+
+	fixture.random.reset(filled(0xf3, 16))
+	if _, reason := fixture.store.Authenticate(fixture.authRequest(0, newChallenge, newNonce, newEndpoint)); reason != RejectNone {
+		t.Fatalf("pending Authenticate after old binding expiry: %q", reason)
+	}
+	rebound, err := fixture.store.GetRoom("room")
+	if err != nil || rebound.Participants[0].GrantState != GrantStateBound || rebound.Participants[0].BindingState != BindingStateBound {
+		t.Fatalf("rebound snapshot = (%#v, %v), want bound/bound", rebound, err)
+	}
+}
+
 func TestRecentCompletionExpiresExactlyAtChallengeTTL(t *testing.T) {
 	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
 	endpoint := netip.MustParseAddrPort("203.0.113.42:6000")
