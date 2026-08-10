@@ -46,7 +46,7 @@
 
 ## 2. 최소 기술 스택과 의존성 budget
 
-Phase 1의 Go 1.26.5, Buf 1.72.0, Protobuf Go/C# runtime과 .NET 9.0.305는 고정된 버전으로 실제 실행·검증됐다. Unity 6.3 native target build, Linux release target과 target-network 동작은 아직 검증되지 않았다.
+Phase 1의 Go 1.26.5, Buf 1.72.0, `protoc` 35.1, `protoc-gen-go` 1.36.11, Protobuf Go/C# runtime과 .NET 9.0.305는 고정된 버전으로 실제 실행·검증됐다. Buf는 workspace-local pinned generator를 호출한다. Unity 6.3 native target build, Linux release target과 target-network 동작은 아직 검증되지 않았다.
 
 | 영역 | 기술 / 버전 | 용도 | 분류 |
 |---|---|---|---|
@@ -54,8 +54,9 @@ Phase 1의 Go 1.26.5, Buf 1.72.0, Protobuf Go/C# runtime과 .NET 9.0.305는 고�
 | Go wire runtime | `google.golang.org/protobuf` **v1.36.11** | generated message와 binary encoding | production |
 | rate limit | `golang.org/x/time/rate` **v0.15.0** | concurrent-safe token bucket | production |
 | schema | proto3, package **`relay.v1`** | UDP wire source of truth | contract |
-| compiler | Protocol Buffers **35.1** | Go/C# generation | development only |
-| schema workflow | Buf CLI **1.72.0**, pinned image/plugin revision | lint, breaking, generate | development only |
+| compiler | `protoc` **35.1** | C# generation | development only |
+| Go generator | `protoc-gen-go` **1.36.11** | Go generation | development only |
+| schema workflow | Buf CLI **1.72.0**, workspace-local pinned generators | lint, breaking, generate | development only |
 | Unity | Unity **6.3 LTS**, exact `6000.3.x` patch는 Phase 4에서 고정 | native sample | client |
 | C# runtime | `Google.Protobuf` **3.35.1** | generated C# message | client |
 | client socket | `System.Net.Sockets.Socket`, .NET Standard 2.1 profile | UDP lifecycle | client |
@@ -364,7 +365,7 @@ fixed input drop reason enum은 `malformed`, `oversized`, `unsupported_version`,
 | application revision | `1` |
 | framing | 한 UDP datagram = 한 `Envelope`; fragmentation/reassembly 없음 |
 
-`api/relay/v1/relay.proto`가 실제 wire source of truth이고, `gen/go/relay/v1/relay.pb.go`와 `unity/RelaySample/Assets/Relay/Generated/Relay.cs`는 고정된 Buf workflow로 생성해 함께 체크인한다. 아래 구조는 그 구현된 계약의 요약이며 수동 편집 대상이 아니다.
+`api/relay/v1/relay.proto`가 실제 wire source of truth이고, `gen/go/relay/v1/relay.pb.go`와 `unity/RelaySample/Assets/Relay/Generated/Relay.cs`는 Buf 1.72.0이 workspace-local pinned `protoc` 35.1과 `protoc-gen-go` 1.36.11을 호출해 생성하고 함께 체크인한다. 아래 구조는 그 구현된 계약의 요약이며 수동 편집 대상이 아니다.
 
 ```proto
 message Envelope {

@@ -56,3 +56,14 @@ Fresh remote execution observed both pinned plugin revisions and regenerated the
 Candidate commit `33397a1ee0106739dcc0bfe2da5fa8e0fb74e4c6` (`test(protocol): verify Go and C# wire compatibility`) was created after an exact seven-path stage, a seven-path-only staged-name check, and `git diff --cached --check` exit `0`, then verified from a clean worktree. The complete commands and outputs are recorded in the Phase 1 evidence.
 
 This accepted ADR and the authoritative status updates belong in a second documentation commit. They record the separately tested candidate SHA, not their own commit SHA; Git history supplies the documentation commit provenance. Generated tracked files must continue to have no worktree-versus-index drift, and generated paths must contain no untracked, non-ignored output.
+
+## Local generation execution addendum — 2026-08-10
+
+The original BSR execution above remains historical evidence. Current generation uses Buf 1.72.0 with the same upstream generator versions locally: `protoc` 35.1 and `google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11`. The `protoc-35.1-osx-aarch_64.zip` archive is pinned to SHA-256 `193289af0470c6a1aada357d4fba0bbf8d78bfaac8b5e42ca30af2ef75583de2`; the Go plugin is built from module `google.golang.org/protobuf/cmd/protoc-gen-go` at `v1.36.11`.
+
+The local trial produced byte-identical hashes:
+
+```text
+05eafda3a4016aeea8a6557c76522d364834ac6d3ac4eda94ccceaf2d5d005b7  gen/go/relay/v1/relay.pb.go
+b6af7c61482115e00a117e0a97990fc4774f077d1c8628d9715b58b6d5047473  unity/RelaySample/Assets/Relay/Generated/Relay.cs
+```

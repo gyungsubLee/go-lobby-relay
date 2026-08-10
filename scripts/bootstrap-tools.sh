@@ -5,6 +5,8 @@ repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 tools_dir="$repo_root/.tools"
 go_dir="$tools_dir/go"
 buf_bin="$tools_dir/bin/buf"
+protoc_bin="$tools_dir/bin/protoc"
+protoc_gen_go_bin="$tools_dir/bin/protoc-gen-go"
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
   echo "unsupported bootstrap host: expected Darwin/arm64" >&2
@@ -30,5 +32,25 @@ if [ ! -x "$buf_bin" ] || [ "$("$buf_bin" --version)" != "1.72.0" ]; then
   install -m 0755 "$tmp_dir/buf" "$buf_bin"
 fi
 
+if [ ! -x "$protoc_bin" ] || [ "$("$protoc_bin" --version)" != "libprotoc 35.1" ]; then
+  curl -fL --retry 3 -o "$tmp_dir/protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v35.1/protoc-35.1-osx-aarch_64.zip
+  printf '%s  %s\n' 193289af0470c6a1aada357d4fba0bbf8d78bfaac8b5e42ca30af2ef75583de2 "$tmp_dir/protoc.zip" | shasum -a 256 -c -
+  unzip -q "$tmp_dir/protoc.zip" -d "$tmp_dir/protoc"
+  mkdir -p "$(dirname "$protoc_bin")"
+  install -m 0755 "$tmp_dir/protoc/bin/protoc" "$protoc_bin"
+fi
+
+if [ ! -x "$protoc_gen_go_bin" ] || [ "$("$protoc_gen_go_bin" --version)" != "protoc-gen-go v1.36.11" ]; then
+  mkdir -p "$tmp_dir/go-bin" "$repo_root/.cache/go-mod"
+  GOBIN="$tmp_dir/go-bin" \
+    GOCACHE="$tmp_dir/go-build-cache" \
+    GOMODCACHE="$repo_root/.cache/go-mod" \
+    "$go_dir/bin/go" install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+  mkdir -p "$(dirname "$protoc_gen_go_bin")"
+  install -m 0755 "$tmp_dir/go-bin/protoc-gen-go" "$protoc_gen_go_bin"
+fi
+
 "$go_dir/bin/go" version
 "$buf_bin" --version
+"$protoc_bin" --version
+"$protoc_gen_go_bin" --version

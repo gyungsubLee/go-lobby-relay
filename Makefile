@@ -1,5 +1,3 @@
-GO_IMAGE := golang@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599
-BUF_IMAGE := bufbuild/buf@sha256:65bd496a89c762ad7151ca9e7d885a45dacb3671a8e8ec39738b9f844d3405ea
 GO := $(CURDIR)/.tools/go/bin/go
 BUF := $(CURDIR)/.tools/bin/buf
 GO_ENV := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod
@@ -9,8 +7,19 @@ GO_ENV := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod
 tools:
 	./scripts/bootstrap-tools.sh
 
+# ponytail: v1 has one generated file per language; use a manifest sync if that changes.
 proto-generate: tools
-	$(BUF) generate
+	@set -eu; \
+	  mkdir -p "$(CURDIR)/.cache"; \
+	  stage=$$(mktemp -d "$(CURDIR)/.cache/proto-generate.XXXXXX"); \
+	  trap 'rm -rf -- "$$stage"' 0 1 2 15; \
+	  $(BUF) generate --output "$$stage"; \
+	  go_output="$$stage/gen/go/relay/v1/relay.pb.go"; \
+	  csharp_output="$$stage/unity/RelaySample/Assets/Relay/Generated/Relay.cs"; \
+	  test -s "$$go_output"; \
+	  test -s "$$csharp_output"; \
+	  mv "$$go_output" "$(CURDIR)/gen/go/relay/v1/relay.pb.go"; \
+	  mv "$$csharp_output" "$(CURDIR)/unity/RelaySample/Assets/Relay/Generated/Relay.cs"
 
 proto-lint: tools
 	$(BUF) lint
