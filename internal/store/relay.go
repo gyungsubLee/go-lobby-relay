@@ -174,7 +174,7 @@ func (store *Store) BeginChallenge(request ChallengeRequest) (ChallengeResult, R
 		}
 		return pending.result, RejectNone
 	}
-	if grant.recent != nil && grant.recent.endpoint == request.Endpoint && grant.recent.clientNonce == request.ClientNonce {
+	if grant.recent != nil && grant.recent.clientNonce == request.ClientNonce {
 		return ChallengeResult{}, RejectAuthFailed
 	}
 
@@ -186,7 +186,7 @@ func (store *Store) BeginChallenge(request ChallengeRequest) (ChallengeResult, R
 	if _, err := io.ReadFull(store.random, serverNonce[:]); err != nil {
 		return ChallengeResult{}, RejectFatalRandom
 	}
-	deadline, _ := deadlineAfter(reading.Mono, store.limits.ChallengeTTL)
+	deadline := saturatingAdd(reading.Mono, store.limits.ChallengeTTL)
 	deadline = min(deadline, grant.monoDeadline, room.monoDeadline)
 	result := ChallengeResult{
 		CandidateID:   candidateID,
@@ -281,7 +281,7 @@ func (store *Store) Authenticate(request AuthenticateRequest) (BoundResult, Reje
 	}
 	key := protocol.BindingKey(*grant.secret, protocol.Revision, grant.roomID, grant.sessionID, grant.id,
 		pending.candidateID, pending.clientNonce, pending.serverNonce)
-	deadline, _ := deadlineAfter(reading.Mono, store.limits.BindingTTL)
+	deadline := saturatingAdd(reading.Mono, store.limits.BindingTTL)
 	deadline = min(deadline, grant.monoDeadline, room.monoDeadline)
 	expiresUnixMS := reading.Wall.Add(deadline - reading.Mono).UTC().UnixMilli()
 	result := BoundResult{
@@ -290,7 +290,7 @@ func (store *Store) Authenticate(request AuthenticateRequest) (BoundResult, Reje
 		AuthTag: protocol.BoundTag(key, protocol.Revision, grant.roomID, grant.sessionID,
 			pending.candidateID, bindingID, expiresUnixMS),
 	}
-	completedDeadline, _ := deadlineAfter(reading.Mono, store.limits.ChallengeTTL)
+	completedDeadline := saturatingAdd(reading.Mono, store.limits.ChallengeTTL)
 	completedDeadline = min(completedDeadline, deadline, grant.monoDeadline, room.monoDeadline)
 	completed := &completedHandshake{
 		candidateID: pending.candidateID,

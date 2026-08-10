@@ -133,6 +133,33 @@ func TestBeginChallengeValidatesAuthorityAndIsIdempotent(t *testing.T) {
 	assertStoreInvariants(t, fixture.store)
 }
 
+func TestBeginChallengeRejectsRememberedNonceAcrossEndpoints(t *testing.T) {
+	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+	oldEndpoint := netip.MustParseAddrPort("192.0.2.14:4000")
+	newEndpoint := netip.MustParseAddrPort("192.0.2.15:4000")
+	nonce := bytes16(0x35)
+	fixture.random.reset(filled(0x44, 16), filled(0x54, 32), filled(0x64, 16))
+	challenge, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, oldEndpoint))
+	if reason != RejectNone {
+		t.Fatalf("BeginChallenge(): %q", reason)
+	}
+	if _, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, oldEndpoint)); reason != RejectNone {
+		t.Fatalf("Authenticate(): %q", reason)
+	}
+	grant := fixture.grant(0)
+	oldBinding, oldRecent := grant.binding, grant.recent
+	oldBindingValue, oldRecentValue := *oldBinding, *oldRecent
+	fixture.random.reset(filled(0x45, 16), filled(0x55, 32))
+
+	if got, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, newEndpoint)); reason != RejectAuthFailed || got != (ChallengeResult{}) {
+		t.Fatalf("remembered nonce from new endpoint = (%#v, %q), want auth_failed", got, reason)
+	}
+	if len(fixture.random.calls) != 0 || grant.pending != nil || grant.binding != oldBinding || grant.recent != oldRecent ||
+		*oldBinding != oldBindingValue || *oldRecent != oldRecentValue {
+		t.Fatal("remembered nonce rejection used randomness or changed current state")
+	}
+}
+
 func TestChallengeExactDeadlineAndTerminalGrantPaths(t *testing.T) {
 	t.Run("challenge deadline", func(t *testing.T) {
 		fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
@@ -414,6 +441,8 @@ func TestRebindRotatesBindingAtomicallyAndKeepsRecentUntilReplacement(t *testing
 	}
 	oldBinding := fixture.grant(0).binding
 	oldBinding.replay.accept(99)
+	oldID, oldKey, oldEndpointValue := oldBinding.id, oldBinding.key, oldBinding.endpoint
+	oldDeadline, oldGeneration, oldReplay := oldBinding.deadline, oldBinding.generation, oldBinding.replay
 	if snapshot, err := fixture.store.GetRoom("room"); err != nil || snapshot.Participants[0].BindingState != BindingStateBound {
 		t.Fatalf("bound snapshot = (%#v, %v)", snapshot, err)
 	}
@@ -435,17 +464,44 @@ func TestRebindRotatesBindingAtomicallyAndKeepsRecentUntilReplacement(t *testing
 	if replay, reason := fixture.store.Authenticate(oldAuth); reason != RejectNone || replay != oldBound {
 		t.Fatalf("old duplicate AUTH during pending rebind = (%#v, %q)", replay, reason)
 	}
+	pending := fixture.grant(0).pending
+	assertOldBinding := func(label string) {
+		t.Helper()
+		grant := fixture.grant(0)
+		if grant.binding != oldBinding || fixture.store.bindingsByID[oldID] != grant || oldBinding.id != oldID ||
+			oldBinding.key != oldKey || oldBinding.endpoint != oldEndpointValue || oldBinding.deadline != oldDeadline ||
+			oldBinding.generation != oldGeneration || oldBinding.replay != oldReplay || grant.state != GrantStateBound ||
+			grant.bindingState != BindingStateRebindPending || grant.pending != pending {
+			t.Fatalf("%s changed the old binding or pending rebind", label)
+		}
+	}
+	collisions := make([][]byte, 9)
+	for index := range collisions {
+		collisions[index] = append([]byte(nil), oldID[:]...)
+	}
+	fixture.random.reset(collisions...)
+	if _, reason := fixture.store.Authenticate(fixture.authRequest(0, newChallenge, newNonce, newEndpoint)); reason != RejectFatalRandom {
+		t.Fatalf("rebind collision exhaustion reason = %q", reason)
+	}
+	assertOldBinding("collision exhaustion")
+	fixture.random.reset(filled(0xee, 15))
+	if _, reason := fixture.store.Authenticate(fixture.authRequest(0, newChallenge, newNonce, newEndpoint)); reason != RejectFatalRandom {
+		t.Fatalf("rebind short read reason = %q", reason)
+	}
+	assertOldBinding("short read")
 
+	fixture.random.reset(filled(0xd4, 16))
 	newBound, reason := fixture.store.Authenticate(fixture.authRequest(0, newChallenge, newNonce, newEndpoint))
 	if reason != RejectNone {
 		t.Fatalf("new Authenticate(): %q", reason)
 	}
 	current := fixture.grant(0).binding
-	if current == oldBinding || current.id != newBound.BindingID || current.endpoint != newEndpoint || current.key == oldBinding.key ||
-		current.replay != (replayWindow{}) || current.generation == oldBinding.generation {
+	if current == oldBinding || current.id != newBound.BindingID || current.id == oldID || current.endpoint != newEndpoint ||
+		current.endpoint == oldEndpointValue || current.key == oldKey || current.replay != (replayWindow{}) ||
+		current.generation != oldGeneration+1 {
 		t.Fatalf("new binding did not rotate all binding-scoped state: old=%#v new=%#v", oldBinding, current)
 	}
-	if _, exists := fixture.store.bindingsByID[oldBound.BindingID]; exists || oldBinding.id != (protocol.Bytes16{}) ||
+	if _, exists := fixture.store.bindingsByID[oldID]; exists || oldBinding.id != (protocol.Bytes16{}) ||
 		oldBinding.key != (protocol.Bytes32{}) || oldBinding.endpoint.IsValid() || oldBinding.replay != (replayWindow{}) {
 		t.Fatal("old binding remained usable or retained secret/index state")
 	}
@@ -459,6 +515,90 @@ func TestRebindRotatesBindingAtomicallyAndKeepsRecentUntilReplacement(t *testing
 		t.Fatalf("rebound snapshot = (%#v, %v)", snapshot, err)
 	}
 	assertStoreInvariants(t, fixture.store)
+}
+
+func TestGetRoomProjectsBindingAndPendingDeadlinesBeforeSweep(t *testing.T) {
+	t.Run("binding", func(t *testing.T) {
+		fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+		endpoint := netip.MustParseAddrPort("203.0.113.44:6000")
+		nonce := bytes16(0xdd)
+		fixture.random.reset(filled(0xde, 16), filled(0xdf, 32), filled(0xe0, 16))
+		challenge, _ := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, endpoint))
+		bound, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, endpoint))
+		if reason != RejectNone {
+			t.Fatalf("Authenticate(): %q", reason)
+		}
+		binding := fixture.grant(0).binding
+		for _, tt := range []struct {
+			name string
+			at   time.Duration
+			want BindingState
+		}{
+			{name: "before", at: 60*time.Second - time.Nanosecond, want: BindingStateBound},
+			{name: "exact", at: 60 * time.Second, want: BindingStateExpired},
+			{name: "after", at: 60*time.Second + time.Nanosecond, want: BindingStateExpired},
+		} {
+			fixture.clock.reading = ClockReading{Wall: testWall.Add(tt.at), Mono: tt.at}
+			snapshot, err := fixture.store.GetRoom("room")
+			if err != nil || snapshot.Participants[0].BindingState != tt.want {
+				t.Fatalf("GetRoom(%s) = (%#v, %v), want binding %q", tt.name, snapshot, err, tt.want)
+			}
+			wantGrant := GrantStateBound
+			if tt.want == BindingStateExpired {
+				wantGrant = GrantStateIssued
+			}
+			if snapshot.Participants[0].GrantState != wantGrant {
+				t.Fatalf("GetRoom(%s) grant = %q, want %q", tt.name, snapshot.Participants[0].GrantState, wantGrant)
+			}
+		}
+		if fixture.grant(0).binding != binding || fixture.store.bindingsByID[bound.BindingID] != fixture.grant(0) {
+			t.Fatal("deadline-aware snapshot mutated store under read access")
+		}
+		fixture.store.Expire()
+		if fixture.grant(0).binding != nil || fixture.store.bindingsByID[bound.BindingID] != nil || binding.key != (protocol.Bytes32{}) {
+			t.Fatal("Expire did not clear the projected-expired binding")
+		}
+	})
+
+	t.Run("rebind pending", func(t *testing.T) {
+		fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+		oldEndpoint := netip.MustParseAddrPort("203.0.113.45:6000")
+		newEndpoint := netip.MustParseAddrPort("203.0.113.46:6000")
+		oldNonce, newNonce := bytes16(0xe1), bytes16(0xe2)
+		fixture.random.reset(filled(0xe3, 16), filled(0xe4, 32), filled(0xe5, 16))
+		oldChallenge, _ := fixture.store.BeginChallenge(fixture.challengeRequest(0, oldNonce, oldEndpoint))
+		if _, reason := fixture.store.Authenticate(fixture.authRequest(0, oldChallenge, oldNonce, oldEndpoint)); reason != RejectNone {
+			t.Fatalf("Authenticate(): %q", reason)
+		}
+		fixture.random.reset(filled(0xe6, 16), filled(0xe7, 32))
+		newChallenge, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, newNonce, newEndpoint))
+		if reason != RejectNone {
+			t.Fatalf("rebind BeginChallenge(): %q", reason)
+		}
+		for _, tt := range []struct {
+			name string
+			at   time.Duration
+			want BindingState
+		}{
+			{name: "before", at: 3*time.Second - time.Nanosecond, want: BindingStateRebindPending},
+			{name: "exact", at: 3 * time.Second, want: BindingStateBound},
+			{name: "after", at: 3*time.Second + time.Nanosecond, want: BindingStateBound},
+		} {
+			fixture.clock.reading = ClockReading{Wall: testWall.Add(tt.at), Mono: tt.at}
+			snapshot, err := fixture.store.GetRoom("room")
+			if err != nil || snapshot.Participants[0].BindingState != tt.want || snapshot.Participants[0].GrantState != GrantStateBound {
+				t.Fatalf("GetRoom(%s) = (%#v, %v), want bound/%q", tt.name, snapshot, err, tt.want)
+			}
+		}
+		if fixture.grant(0).pending == nil || fixture.store.candidatesByID[newChallenge.CandidateID] != fixture.grant(0) {
+			t.Fatal("deadline-aware snapshot mutated pending state")
+		}
+		fixture.store.Expire()
+		if fixture.grant(0).pending != nil || fixture.store.candidatesByID[newChallenge.CandidateID] != nil ||
+			fixture.grant(0).binding == nil || fixture.grant(0).bindingState != BindingStateBound {
+			t.Fatal("Expire did not clear projected-expired pending state")
+		}
+	})
 }
 
 func TestRecentCompletionExpiresExactlyAtChallengeTTL(t *testing.T) {
@@ -558,6 +698,105 @@ func TestPreauthGlobalBoundaryDoesNotPartiallyCommitSource(t *testing.T) {
 	}
 	if fixture.store.preauthSources[sourceKey(newEndpoint)] != nil || len(fixture.store.preauthSources) != fixture.limits.PreauthGlobalPacketBurst {
 		t.Fatal("global rejection partially committed a new source record")
+	}
+}
+
+func TestPreauthByteBoundariesAreAtomicAcrossAllFourLimiters(t *testing.T) {
+	t.Run("source byte", func(t *testing.T) {
+		for _, tt := range []struct {
+			name      string
+			finalCost int
+			want      RejectReason
+		}{
+			{name: "equality", finalCost: 1_041, want: RejectNone},
+			{name: "one over", finalCost: 1_042, want: RejectRateLimited},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+				endpoint := netip.MustParseAddrPort("192.0.2.80:8000")
+				for index := range 159 {
+					if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: endpoint, InputBytes: 1_201}); reason != RejectNone {
+						t.Fatalf("setup packet %d reason = %q", index, reason)
+					}
+				}
+				now := limiterTime(fixture.clock.reading.Mono)
+				source := fixture.store.preauthSources[sourceKey(endpoint)]
+				before := preauthBalancesAt(fixture.store, source, now)
+				if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: endpoint, InputBytes: tt.finalCost}); reason != tt.want {
+					t.Fatalf("final admission reason = %q, want %q", reason, tt.want)
+				}
+				after := preauthBalancesAt(fixture.store, source, now)
+				if tt.want == RejectRateLimited {
+					if after != before {
+						t.Fatalf("source-byte block partially consumed: before=%#v after=%#v", before, after)
+					}
+				} else if after != (preauthBalances{before.sourcePackets - 1, before.sourceBytes - float64(tt.finalCost), before.globalPackets - 1, before.globalBytes - float64(tt.finalCost)}) {
+					t.Fatalf("source-byte equality balances: before=%#v after=%#v", before, after)
+				}
+			})
+		}
+	})
+
+	t.Run("global byte", func(t *testing.T) {
+		for _, tt := range []struct {
+			name      string
+			finalCost int
+			want      RejectReason
+		}{
+			{name: "equality", finalCost: 1_122, want: RejectNone},
+			{name: "one over", finalCost: 1_123, want: RejectRateLimited},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+				var target netip.AddrPort
+				for index := range 1_278 {
+					endpoint := netip.AddrPortFrom(netip.AddrFrom4([4]byte{10, 20, byte(index >> 8), byte(index)}), 8000)
+					if index == 0 {
+						target = endpoint
+					}
+					if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: endpoint, InputBytes: 1_201}); reason != RejectNone {
+						t.Fatalf("setup packet %d reason = %q", index, reason)
+					}
+				}
+				now := limiterTime(fixture.clock.reading.Mono)
+				source := fixture.store.preauthSources[sourceKey(target)]
+				before := preauthBalancesAt(fixture.store, source, now)
+				if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: target, InputBytes: tt.finalCost}); reason != tt.want {
+					t.Fatalf("final admission reason = %q, want %q", reason, tt.want)
+				}
+				after := preauthBalancesAt(fixture.store, source, now)
+				if tt.want == RejectRateLimited {
+					if after != before {
+						t.Fatalf("global-byte block partially consumed: before=%#v after=%#v", before, after)
+					}
+				} else if after != (preauthBalances{before.sourcePackets - 1, before.sourceBytes - float64(tt.finalCost), before.globalPackets - 1, before.globalBytes - float64(tt.finalCost)}) {
+					t.Fatalf("global-byte equality balances: before=%#v after=%#v", before, after)
+				}
+			})
+		}
+	})
+}
+
+func TestHandshakeDeadlinesSaturateNearMaxMonotonicTime(t *testing.T) {
+	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+	maxDeadline := time.Duration(math.MaxInt64)
+	now := maxDeadline - 2*time.Second
+	fixture.store.roomsByID["room"].monoDeadline = maxDeadline
+	fixture.grant(0).monoDeadline = maxDeadline
+	fixture.clock.reading = ClockReading{Wall: testWall, Mono: now}
+	endpoint := netip.MustParseAddrPort("192.0.2.90:9000")
+	nonce := bytes16(0xf9)
+	fixture.random.reset(filled(0xfa, 16), filled(0xfb, 32), filled(0xfc, 16))
+	challenge, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, endpoint))
+	if reason != RejectNone || fixture.grant(0).pending == nil || fixture.grant(0).pending.deadline != maxDeadline ||
+		challenge.ExpiresUnixMS != testWall.Add(2*time.Second).UnixMilli() {
+		t.Fatalf("near-max challenge = (%#v, %q, %#v)", challenge, reason, fixture.grant(0).pending)
+	}
+	bound, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, endpoint))
+	if reason != RejectNone || fixture.grant(0).binding == nil || fixture.grant(0).binding.deadline != maxDeadline ||
+		fixture.grant(0).recent == nil || fixture.grant(0).recent.deadline != maxDeadline ||
+		bound.ExpiresUnixMS != testWall.Add(2*time.Second).UnixMilli() {
+		t.Fatalf("near-max bound = (%#v, %q, binding=%#v recent=%#v)", bound, reason, fixture.grant(0).binding, fixture.grant(0).recent)
 	}
 }
 
@@ -701,6 +940,19 @@ func TestExpireAndEndRoomClearRelaySecretsAndIndexes(t *testing.T) {
 		t.Fatalf("terminal cleanup retained relay material: bound=%x binding=%#v recent=%#v", bound.BindingID, binding, recent)
 	}
 	assertStoreInvariants(t, fixture.store)
+}
+
+type preauthBalances struct {
+	sourcePackets, sourceBytes, globalPackets, globalBytes float64
+}
+
+func preauthBalancesAt(store *Store, source *preauthSource, now time.Time) preauthBalances {
+	return preauthBalances{
+		sourcePackets: source.packets.TokensAt(now),
+		sourceBytes:   source.bytes.TokensAt(now),
+		globalPackets: store.preauthGlobalPackets.TokensAt(now),
+		globalBytes:   store.preauthGlobalBytes.TokensAt(now),
+	}
 }
 
 type handshakeFixture struct {

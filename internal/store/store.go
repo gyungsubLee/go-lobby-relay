@@ -547,6 +547,17 @@ func snapshotAt(roomID string, room *roomRecord, now time.Duration) RoomSnapshot
 			bindingState = BindingStateExpired
 		case GrantStateRevoked:
 			bindingState = BindingStateRevoked
+		default:
+			if grant.binding != nil {
+				if now >= grant.binding.deadline {
+					state = GrantStateIssued
+					bindingState = BindingStateExpired
+				} else if grant.pending != nil && now < grant.pending.deadline {
+					bindingState = BindingStateRebindPending
+				} else {
+					bindingState = BindingStateBound
+				}
+			}
 		}
 		snapshot.Participants[index] = ParticipantSnapshot{
 			ParticipantID:  grant.participantID,
