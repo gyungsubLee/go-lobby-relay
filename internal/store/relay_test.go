@@ -941,6 +941,154 @@ func TestPreauthRateLimitWinsWithoutAuthenticatedDoubleCharge(t *testing.T) {
 	}
 }
 
+func TestFailedHelloAndAuthChargeOnlyPreauthOnce(t *testing.T) {
+	for _, name := range []string{"hello unknown grant", "hello wrong room", "auth unknown candidate", "auth bad HMAC"} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newRelayStoreFixture(t, DefaultLimits())
+			client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+			grant := fixture.store.bindingsByID[client.bindingID]
+			endpoint := client.endpoint
+			inputBytes := 321
+			want := RejectUnknownGrant
+			var call func() RejectReason
+			switch name {
+			case "hello unknown grant":
+				request := ChallengeRequest{
+					RoomID: "room", SessionID: client.sessionID, GrantID: bytes16(0xfe),
+					ClientNonce: bytes16(0x61), Endpoint: endpoint, InputBytes: inputBytes,
+				}
+				call = func() RejectReason { _, reason := fixture.store.BeginChallenge(request); return reason }
+			case "hello wrong room":
+				want = RejectWrongRoom
+				request := ChallengeRequest{
+					RoomID: "other-room", SessionID: client.sessionID, GrantID: client.grantID,
+					ClientNonce: bytes16(0x62), Endpoint: endpoint, InputBytes: inputBytes,
+				}
+				call = func() RejectReason { _, reason := fixture.store.BeginChallenge(request); return reason }
+			case "auth unknown candidate":
+				inputBytes, want = 123, RejectAuthFailed
+				request := AuthenticateRequest{
+					RoomID: "room", SessionID: client.sessionID, CandidateID: bytes16(0xfd),
+					Endpoint: endpoint, InputBytes: inputBytes,
+				}
+				call = func() RejectReason { _, reason := fixture.store.Authenticate(request); return reason }
+			case "auth bad HMAC":
+				inputBytes, want = 123, RejectAuthFailed
+				rebindEndpoint := netip.AddrPortFrom(endpoint.Addr(), endpoint.Port()+1)
+				nonce := bytes16(0x63)
+				challenge, reason := fixture.store.BeginChallenge(ChallengeRequest{
+					RoomID: "room", SessionID: client.sessionID, GrantID: client.grantID,
+					ClientNonce: nonce, Endpoint: rebindEndpoint, InputBytes: 300,
+				})
+				if reason != RejectNone {
+					t.Fatalf("rebind BeginChallenge(): %q", reason)
+				}
+				request := AuthenticateRequest{
+					RoomID: "room", SessionID: client.sessionID, CandidateID: challenge.CandidateID,
+					Endpoint: rebindEndpoint, InputBytes: inputBytes,
+					AuthTag: protocol.AuthTag(client.secret, protocol.Revision, "room", client.sessionID,
+						client.grantID, challenge.CandidateID, nonce, challenge.ServerNonce),
+				}
+				request.AuthTag[0] ^= 1
+				endpoint = rebindEndpoint
+				call = func() RejectReason { _, reason := fixture.store.Authenticate(request); return reason }
+			}
+
+			now := limiterTime(fixture.clock.reading.Mono)
+			source := fixture.store.preauthSources[sourceKey(endpoint)]
+			preBefore := preauthBalancesAt(fixture.store, source, now)
+			authBefore := authenticatedBalancesAt(fixture.store, grant, now)
+			recordsBefore := snapshotRelayRecords(grant)
+			if reason := call(); reason != want {
+				t.Fatalf("reason = %q, want %q", reason, want)
+			}
+			wantPre := preauthBalances{
+				preBefore.sourcePackets - 1, preBefore.sourceBytes - float64(inputBytes),
+				preBefore.globalPackets - 1, preBefore.globalBytes - float64(inputBytes),
+			}
+			if preAfter := preauthBalancesAt(fixture.store, source, now); preAfter != wantPre {
+				t.Fatalf("preauth charge = %#v, want %#v", preAfter, wantPre)
+			}
+			if authAfter := authenticatedBalancesAt(fixture.store, grant, now); authAfter != authBefore {
+				t.Fatalf("failed %s used authenticated budget: %#v -> %#v", name, authBefore, authAfter)
+			}
+			assertRelayRecordsUnchanged(t, grant, recordsBefore)
+		})
+	}
+}
+
+func TestRateLimitedHelloAndAuthDoNotMutateChallengeOrBinding(t *testing.T) {
+	for _, name := range []string{"hello", "auth"} {
+		t.Run(name, func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.PreauthSourcePacketRate = 0.1
+			if name == "hello" {
+				limits.PreauthSourcePacketBurst = 3
+			} else {
+				limits.PreauthSourcePacketBurst = 4
+			}
+			fixture := newRelayStoreFixture(t, limits)
+			client := fixture.addBoundRoom(t, "room", 1, 1)[0]
+			grant := fixture.store.bindingsByID[client.bindingID]
+			var call func() RejectReason
+			if name == "hello" {
+				request := ChallengeRequest{
+					RoomID: "room", SessionID: client.sessionID, GrantID: client.grantID,
+					ClientNonce: bytes16(0x71), Endpoint: client.endpoint, InputBytes: 300,
+				}
+				call = func() RejectReason {
+					result, reason := fixture.store.BeginChallenge(request)
+					if result != (ChallengeResult{}) {
+						t.Fatalf("rate-limited HELLO returned a challenge: %#v", result)
+					}
+					return reason
+				}
+			} else {
+				rebindEndpoint := netip.AddrPortFrom(client.endpoint.Addr(), client.endpoint.Port()+1)
+				nonce := bytes16(0x72)
+				challenge, reason := fixture.store.BeginChallenge(ChallengeRequest{
+					RoomID: "room", SessionID: client.sessionID, GrantID: client.grantID,
+					ClientNonce: nonce, Endpoint: rebindEndpoint, InputBytes: 300,
+				})
+				if reason != RejectNone {
+					t.Fatalf("rebind BeginChallenge(): %q", reason)
+				}
+				request := AuthenticateRequest{
+					RoomID: "room", SessionID: client.sessionID, CandidateID: challenge.CandidateID,
+					Endpoint: rebindEndpoint, InputBytes: 100,
+					AuthTag: protocol.AuthTag(client.secret, protocol.Revision, "room", client.sessionID,
+						client.grantID, challenge.CandidateID, nonce, challenge.ServerNonce),
+				}
+				call = func() RejectReason {
+					result, reason := fixture.store.Authenticate(request)
+					if result != (BoundResult{}) {
+						t.Fatalf("rate-limited AUTH returned a binding: %#v", result)
+					}
+					return reason
+				}
+			}
+			if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: client.endpoint, InputBytes: 1}); reason != RejectNone {
+				t.Fatalf("exhaust preauth source: %q", reason)
+			}
+			now := limiterTime(fixture.clock.reading.Mono)
+			source := fixture.store.preauthSources[sourceKey(client.endpoint)]
+			preBefore := preauthBalancesAt(fixture.store, source, now)
+			authBefore := authenticatedBalancesAt(fixture.store, grant, now)
+			recordsBefore := snapshotRelayRecords(grant)
+			if reason := call(); reason != RejectRateLimited {
+				t.Fatalf("rate-limited %s reason = %q", name, reason)
+			}
+			if preAfter := preauthBalancesAt(fixture.store, source, now); preAfter != preBefore {
+				t.Fatalf("rate-limited %s partially charged/reset preauth: %#v -> %#v", name, preBefore, preAfter)
+			}
+			if authAfter := authenticatedBalancesAt(fixture.store, grant, now); authAfter != authBefore {
+				t.Fatalf("rate-limited %s used authenticated budget: %#v -> %#v", name, authBefore, authAfter)
+			}
+			assertRelayRecordsUnchanged(t, grant, recordsBefore)
+		})
+	}
+}
+
 func TestExpiredBoundLikeRateLimitDoesNotMutateAuthorityBeforeAdmission(t *testing.T) {
 	for _, target := range []string{"binding", "grant", "room"} {
 		t.Run(target, func(t *testing.T) {
@@ -1616,6 +1764,79 @@ func TestPreauthRejectedHelloRefreshesExistingSource(t *testing.T) {
 	}
 }
 
+func TestExistingSourceRejectedAndRateLimitedObservationDoesNotResetLimiters(t *testing.T) {
+	t.Run("admitted rejection charges once on existing limiter", func(t *testing.T) {
+		fixture := newRelayStoreFixture(t, DefaultLimits())
+		endpoint := netip.MustParseAddrPort("192.0.2.61:7000")
+		if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: endpoint, InputBytes: 100}); reason != RejectNone {
+			t.Fatalf("initial AdmitPreauth(): %q", reason)
+		}
+		source := fixture.store.preauthSources[sourceKey(endpoint)]
+		packets, bytes := source.packets, source.bytes
+		fixture.setMono(time.Second)
+		now := limiterTime(time.Second)
+		before := preauthBalancesAt(fixture.store, source, now)
+		if _, reason := fixture.store.BeginChallenge(ChallengeRequest{
+			RoomID: "room", SessionID: "session", GrantID: bytes16(0xfe), ClientNonce: bytes16(1),
+			Endpoint: endpoint, InputBytes: 321,
+		}); reason != RejectUnknownGrant {
+			t.Fatalf("unknown HELLO reason = %q", reason)
+		}
+		want := preauthBalances{before.sourcePackets - 1, before.sourceBytes - 321, before.globalPackets - 1, before.globalBytes - 321}
+		if after := preauthBalancesAt(fixture.store, source, now); after != want {
+			t.Fatalf("rejected existing-source charge = %#v, want %#v", after, want)
+		}
+		if fixture.store.preauthSources[sourceKey(endpoint)] != source || source.packets != packets || source.bytes != bytes || source.lastObserved != time.Second {
+			t.Fatal("rejected existing source recreated its record/limiters or missed observation refresh")
+		}
+	})
+
+	t.Run("rate rejection refreshes idle deadline without partial charge or burst reset", func(t *testing.T) {
+		limits := DefaultLimits()
+		limits.PreauthSourcePacketRate = 0.01
+		limits.PreauthSourcePacketBurst = 1
+		fixture := newRelayStoreFixture(t, limits)
+		endpoint := netip.MustParseAddrPort("192.0.2.62:7000")
+		if reason := fixture.store.AdmitPreauth(PreauthRequest{Endpoint: endpoint, InputBytes: 100}); reason != RejectNone {
+			t.Fatalf("initial AdmitPreauth(): %q", reason)
+		}
+		source := fixture.store.preauthSources[sourceKey(endpoint)]
+		packets, bytes := source.packets, source.bytes
+		refreshed := 30 * time.Second
+		fixture.setMono(refreshed)
+		now := limiterTime(refreshed)
+		before := preauthBalancesAt(fixture.store, source, now)
+		if _, reason := fixture.store.BeginChallenge(ChallengeRequest{
+			RoomID: "room", SessionID: "session", GrantID: bytes16(0xfd), ClientNonce: bytes16(2),
+			Endpoint: endpoint, InputBytes: 200,
+		}); reason != RejectRateLimited {
+			t.Fatalf("rate-limited HELLO reason = %q", reason)
+		}
+		if after := preauthBalancesAt(fixture.store, source, now); after != before {
+			t.Fatalf("rate-limited existing source partially charged/reset: %#v -> %#v", before, after)
+		}
+		if fixture.store.preauthSources[sourceKey(endpoint)] != source || source.packets != packets || source.bytes != bytes || source.lastObserved != refreshed {
+			t.Fatal("rate-limited existing source recreated limiters or missed observation refresh")
+		}
+
+		fixture.setMono(preauthSourceIdleTTL)
+		fixture.store.Expire()
+		if fixture.store.preauthSources[sourceKey(endpoint)] != source {
+			t.Fatal("source was evicted at its original idle deadline despite refreshed observation")
+		}
+		fixture.setMono(refreshed + preauthSourceIdleTTL - time.Nanosecond)
+		fixture.store.Expire()
+		if fixture.store.preauthSources[sourceKey(endpoint)] != source {
+			t.Fatal("source was evicted before refreshed idle deadline")
+		}
+		fixture.setMono(refreshed + preauthSourceIdleTTL)
+		fixture.store.Expire()
+		if fixture.store.preauthSources[sourceKey(endpoint)] != nil {
+			t.Fatal("source survived exact refreshed idle deadline")
+		}
+	})
+}
+
 func TestPreauthFullTableUsesProcessOnlyAndCreatesNoRecord(t *testing.T) {
 	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
 	for index := range HardMaxPreauthSources {
@@ -1704,37 +1925,101 @@ func TestExpireRemovesIdleSourcesAndBindingAtExactDeadlines(t *testing.T) {
 }
 
 func TestExpireAndEndRoomClearRelaySecretsAndIndexes(t *testing.T) {
-	fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
-	endpoint := netip.MustParseAddrPort("192.0.2.70:7000")
-	nonce := bytes16(0xf1)
-	fixture.random.reset(filled(0xf2, 16), filled(0xf3, 32), filled(0xf4, 16))
-	challenge, _ := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, endpoint))
-	bound, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, endpoint))
-	if reason != RejectNone {
-		t.Fatalf("Authenticate(): %q", reason)
+	for _, tt := range []struct {
+		name          string
+		terminalState GrantState
+		bindingState  BindingState
+		terminate     func(*handshakeFixture) error
+	}{
+		{
+			name:          "EndRoom",
+			terminalState: GrantStateRevoked,
+			bindingState:  BindingStateRevoked,
+			terminate:     func(fixture *handshakeFixture) error { return fixture.store.EndRoom("room") },
+		},
+		{
+			name:          "Expire",
+			terminalState: GrantStateExpired,
+			bindingState:  BindingStateExpired,
+			terminate: func(fixture *handshakeFixture) error {
+				fixture.clock.reading = ClockReading{Wall: testWall.Add(time.Second), Mono: time.Second}
+				fixture.store.roomsByID["room"].monoDeadline = time.Second
+				fixture.store.Expire()
+				return nil
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHandshakeFixture(t, time.Hour, 30*time.Minute, 1)
+			endpoint := netip.MustParseAddrPort("192.0.2.70:7000")
+			nonce := bytes16(0xf1)
+			fixture.random.reset(filled(0xf2, 16), filled(0xf3, 32), filled(0xf4, 16))
+			challenge, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, nonce, endpoint))
+			if reason != RejectNone {
+				t.Fatalf("BeginChallenge(): %q", reason)
+			}
+			bound, reason := fixture.store.Authenticate(fixture.authRequest(0, challenge, nonce, endpoint))
+			if reason != RejectNone {
+				t.Fatalf("Authenticate(): %q", reason)
+			}
+
+			grant := fixture.grant(0)
+			binding := grant.binding
+			request := ClientDataRequest{
+				RoomID: "room", SessionID: fixture.session(0), BindingID: bound.BindingID, Sequence: 42,
+				Endpoint: endpoint, Payload: []byte("replay state"),
+			}
+			request.AuthTag = protocol.ClientDataTag(binding.key, protocol.Revision, request.RoomID, request.SessionID,
+				request.BindingID, request.Sequence, request.Payload)
+			if _, reason := fixture.store.AdmitClientIngress(request, 123); reason != RejectNone {
+				t.Fatalf("AdmitClientIngress(): %q", reason)
+			}
+
+			fixture.random.reset(filled(0xa2, 16), filled(0xa3, 32))
+			pending, reason := fixture.store.BeginChallenge(fixture.challengeRequest(
+				0, bytes16(0xa1), netip.MustParseAddrPort("192.0.2.73:7000"),
+			))
+			if reason != RejectNone {
+				t.Fatalf("pending rebind BeginChallenge(): %q", reason)
+			}
+
+			room := fixture.store.roomsByID["room"]
+			secret := grant.secret
+			recent := grant.recent
+			pendingRecord := grant.pending
+			if secret == nil || *secret == (protocol.Bytes32{}) || binding.id == (protocol.Bytes16{}) ||
+				binding.key == (protocol.Bytes32{}) || !binding.endpoint.IsValid() || binding.replay == (replayWindow{}) ||
+				recent == nil || pendingRecord == nil || grant.ingressPackets == nil || grant.ingressBytes == nil ||
+				room.ingressPackets == nil || room.ingressBytes == nil || room.fanoutWrites == nil || room.fanoutBytes == nil {
+				t.Fatal("terminal cleanup fixture did not contain every relay-owned field")
+			}
+			grantID, bindingID := grant.id, binding.id
+			recentID, pendingID := recent.candidateID, pendingRecord.candidateID
+
+			if err := tt.terminate(fixture); err != nil {
+				t.Fatalf("%s(): %v", tt.name, err)
+			}
+			if grant.state != tt.terminalState || grant.bindingState != tt.bindingState ||
+				grant.secret != nil || grant.binding != nil || grant.pending != nil || grant.recent != nil ||
+				grant.generation != 0 || grant.ingressPackets != nil || grant.ingressBytes != nil ||
+				*secret != (protocol.Bytes32{}) {
+				t.Fatalf("terminal grant retained ownership/state: %#v secret=%x", grant, *secret)
+			}
+			if binding.id != (protocol.Bytes16{}) || binding.key != (protocol.Bytes32{}) || binding.endpoint.IsValid() ||
+				binding.generation != 0 || binding.replay != (replayWindow{}) {
+				t.Fatalf("terminal binding retained authority: %#v", binding)
+			}
+			assertChallengeRecordZero(t, "pending", pendingRecord)
+			assertCompletedHandshakeZero(t, recent)
+			if fixture.store.grantsByID[grantID] != nil || fixture.store.bindingsByID[bindingID] != nil ||
+				fixture.store.candidatesByID[recentID] != nil || fixture.store.candidatesByID[pendingID] != nil ||
+				len(fixture.store.grantsByID) != 0 || len(fixture.store.bindingsByID) != 0 || len(fixture.store.candidatesByID) != 0 {
+				t.Fatalf("terminal indexes retained grant=%x binding=%x recent=%x pending=%x", grantID, bindingID, recentID, pending.CandidateID)
+			}
+			assertTombstoneOnly(t, fixture.store, "room", fixture.clock.reading.Mono+fixture.limits.TombstoneTTL)
+			assertStoreInvariants(t, fixture.store)
+		})
 	}
-	fixture.random.reset(filled(0xa2, 16), filled(0xa3, 32))
-	pending, reason := fixture.store.BeginChallenge(fixture.challengeRequest(0, bytes16(0xa1), netip.MustParseAddrPort("192.0.2.73:7000")))
-	if reason != RejectNone {
-		t.Fatalf("pending rebind BeginChallenge(): %q", reason)
-	}
-	room := fixture.store.roomsByID["room"]
-	grant := fixture.grant(0)
-	binding := fixture.grant(0).binding
-	recent := fixture.grant(0).recent
-	pendingRecord := fixture.grant(0).pending
-	if err := fixture.store.EndRoom("room"); err != nil {
-		t.Fatalf("EndRoom(): %v", err)
-	}
-	if len(fixture.store.candidatesByID) != 0 || len(fixture.store.bindingsByID) != 0 ||
-		binding.key != (protocol.Bytes32{}) || binding.id != (protocol.Bytes16{}) || binding.endpoint.IsValid() ||
-		recent.candidateID != (protocol.Bytes16{}) || recent.clientNonce != (protocol.Bytes16{}) || recent.serverNonce != (protocol.Bytes32{}) ||
-		pendingRecord.candidateID != (protocol.Bytes16{}) || pendingRecord.clientNonce != (protocol.Bytes16{}) || pendingRecord.serverNonce != (protocol.Bytes32{}) ||
-		grant.ingressPackets != nil || grant.ingressBytes != nil || room.ingressPackets != nil || room.ingressBytes != nil ||
-		room.fanoutWrites != nil || room.fanoutBytes != nil {
-		t.Fatalf("terminal cleanup retained relay material: bound=%x pending=%x binding=%#v recent=%#v", bound.BindingID, pending.CandidateID, binding, recent)
-	}
-	assertStoreInvariants(t, fixture.store)
 }
 
 func TestRelayAuthorityEndsAtExactRoomGrantAndBindingDeadlines(t *testing.T) {
@@ -1780,6 +2065,68 @@ func TestRelayAuthorityEndsAtExactRoomGrantAndBindingDeadlines(t *testing.T) {
 
 type preauthBalances struct {
 	sourcePackets, sourceBytes, globalPackets, globalBytes float64
+}
+
+type relayRecordsSnapshot struct {
+	state          GrantState
+	bindingState   BindingState
+	generation     uint64
+	bindingPointer *bindingRecord
+	binding        bindingRecord
+	pendingPointer *challengeRecord
+	pending        challengeRecord
+	recentPointer  *completedHandshake
+	recent         completedHandshake
+}
+
+func snapshotRelayRecords(grant *grantRecord) relayRecordsSnapshot {
+	snapshot := relayRecordsSnapshot{
+		state: grant.state, bindingState: grant.bindingState, generation: grant.generation,
+		bindingPointer: grant.binding, pendingPointer: grant.pending, recentPointer: grant.recent,
+	}
+	if grant.binding != nil {
+		snapshot.binding = *grant.binding
+	}
+	if grant.pending != nil {
+		snapshot.pending = *grant.pending
+	}
+	if grant.recent != nil {
+		snapshot.recent = *grant.recent
+	}
+	return snapshot
+}
+
+func assertRelayRecordsUnchanged(t *testing.T, grant *grantRecord, want relayRecordsSnapshot) {
+	t.Helper()
+	if grant.state != want.state || grant.bindingState != want.bindingState || grant.generation != want.generation ||
+		grant.binding != want.bindingPointer || grant.pending != want.pendingPointer || grant.recent != want.recentPointer {
+		t.Fatalf("relay ownership/state changed: grant=%#v want=%#v", grant, want)
+	}
+	if grant.binding != nil && *grant.binding != want.binding {
+		t.Fatalf("binding changed: got=%#v want=%#v", *grant.binding, want.binding)
+	}
+	if grant.pending != nil && *grant.pending != want.pending {
+		t.Fatalf("pending challenge changed: got=%#v want=%#v", *grant.pending, want.pending)
+	}
+	if grant.recent != nil && *grant.recent != want.recent {
+		t.Fatalf("recent completion changed: got=%#v want=%#v", *grant.recent, want.recent)
+	}
+}
+
+func assertChallengeRecordZero(t *testing.T, name string, record *challengeRecord) {
+	t.Helper()
+	if record.candidateID != (protocol.Bytes16{}) || record.clientNonce != (protocol.Bytes16{}) ||
+		record.serverNonce != (protocol.Bytes32{}) || record.endpoint.IsValid() || record.result != (ChallengeResult{}) {
+		t.Fatalf("%s challenge retained authority: %#v", name, record)
+	}
+}
+
+func assertCompletedHandshakeZero(t *testing.T, record *completedHandshake) {
+	t.Helper()
+	if record.candidateID != (protocol.Bytes16{}) || record.clientNonce != (protocol.Bytes16{}) ||
+		record.serverNonce != (protocol.Bytes32{}) || record.endpoint.IsValid() || record.result != (BoundResult{}) {
+		t.Fatalf("recent completion retained authority: %#v", record)
+	}
 }
 
 func preauthBalancesAt(store *Store, source *preauthSource, now time.Time) preauthBalances {
