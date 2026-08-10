@@ -410,6 +410,54 @@ func TestDispatchHandlesEveryPacketKindAndReusesOneFanoutEncoding(t *testing.T) 
 	}
 }
 
+func TestDispatchEmitsHandshakeIndependentOfHostWall(t *testing.T) {
+	for _, wall := range []time.Time{
+		time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC),
+	} {
+		t.Run(wall.Format("2006"), func(t *testing.T) {
+			fixture := newStoreFixture(t, store.DefaultLimits())
+			fixture.clock.reading = store.ClockReading{Wall: wall}
+			allocation := fixture.addRoom(t, "room", 1)
+			socket := new(fakeSocket)
+			relay, err := New(socket, fixture.store, Config{})
+			if err != nil {
+				t.Fatalf("New(): %v", err)
+			}
+			t.Cleanup(func() { _ = relay.Close() })
+
+			endpoint := netip.MustParseAddrPort("192.0.2.99:4999")
+			nonce := filled16(0x91)
+			hello := helloDatagram("room", allocation.Grants[0].SessionID, allocation.Grants[0].GrantID, nonce)
+			if err := relay.dispatch(hello, endpoint); err != nil {
+				t.Fatalf("dispatch(HELLO): %v", err)
+			}
+			writes, _, _, _ := socket.snapshot()
+			if len(writes) != 1 {
+				t.Fatalf("CHALLENGE writes = %d, want 1", len(writes))
+			}
+			challenge := unmarshalEnvelope(t, writes[0].data).GetChallenge()
+			candidateID := fixed16(t, challenge.CandidateId)
+			serverNonce := fixed32(t, challenge.ServerNonce)
+			secret := *allocation.Grants[0].GrantSecret
+			authTag := protocol.AuthTag(secret, protocol.Revision, "room", allocation.Grants[0].SessionID,
+				allocation.Grants[0].GrantID, candidateID, nonce, serverNonce)
+			auth := marshalClient(&relayv1.Envelope{
+				ProtocolRevision: protocol.Revision, RoomId: "room", SessionId: allocation.Grants[0].SessionID,
+				AuthTag: authTag[:],
+				Body:    &relayv1.Envelope_Auth{Auth: &relayv1.Auth{CandidateId: candidateID[:]}},
+			})
+			if err := relay.dispatch(auth, endpoint); err != nil {
+				t.Fatalf("dispatch(AUTH): %v", err)
+			}
+			writes, _, _, _ = socket.snapshot()
+			if len(writes) != 2 || unmarshalEnvelope(t, writes[1].data).GetBound() == nil {
+				t.Fatalf("handshake writes = %d, want CHALLENGE then BOUND", len(writes))
+			}
+		})
+	}
+}
+
 func TestDispatchClassifiesFixedDropReasonsExactlyOnce(t *testing.T) {
 	tests := []struct {
 		name string
@@ -519,6 +567,95 @@ func TestDispatchClassifiesFixedDropReasonsExactlyOnce(t *testing.T) {
 			writes, _, _, _ := socket.snapshot()
 			if len(writes) != 0 {
 				t.Fatalf("rejected input wrote %d datagrams", len(writes))
+			}
+		})
+	}
+}
+
+func TestDispatchClassifiesRetiredCredentialsAfterEndRoom(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    store.RejectReason
+		prepare func(testing.TB, *storeFixture, store.Allocation) ([]byte, netip.AddrPort)
+	}{
+		{
+			name: "HELLO is unknown_grant",
+			want: store.RejectUnknownGrant,
+			prepare: func(_ testing.TB, _ *storeFixture, allocation store.Allocation) ([]byte, netip.AddrPort) {
+				return helloDatagram("room", allocation.Grants[0].SessionID, allocation.Grants[0].GrantID, filled16(0xa1)),
+					netip.MustParseAddrPort("192.0.2.101:4101")
+			},
+		},
+		{
+			name: "AUTH is auth_failed",
+			want: store.RejectAuthFailed,
+			prepare: func(t testing.TB, fixture *storeFixture, allocation store.Allocation) ([]byte, netip.AddrPort) {
+				endpoint := netip.MustParseAddrPort("192.0.2.102:4102")
+				nonce := filled16(0xa2)
+				challenge, reason := fixture.store.BeginChallenge(store.ChallengeRequest{
+					RoomID: "room", SessionID: allocation.Grants[0].SessionID, GrantID: allocation.Grants[0].GrantID,
+					ClientNonce: nonce, Endpoint: endpoint, InputBytes: protocol.MinHelloBytes,
+				})
+				if reason != store.RejectNone {
+					t.Fatalf("BeginChallenge(): %q", reason)
+				}
+				secret := *allocation.Grants[0].GrantSecret
+				tag := protocol.AuthTag(secret, protocol.Revision, "room", allocation.Grants[0].SessionID,
+					allocation.Grants[0].GrantID, challenge.CandidateID, nonce, challenge.ServerNonce)
+				return marshalClient(&relayv1.Envelope{
+					ProtocolRevision: protocol.Revision, RoomId: "room", SessionId: allocation.Grants[0].SessionID,
+					AuthTag: tag[:],
+					Body:    &relayv1.Envelope_Auth{Auth: &relayv1.Auth{CandidateId: challenge.CandidateID[:]}},
+				}), endpoint
+			},
+		},
+		{
+			name: "ClientData is not_bound",
+			want: store.RejectNotBound,
+			prepare: func(t testing.TB, fixture *storeFixture, allocation store.Allocation) ([]byte, netip.AddrPort) {
+				client := fixture.bindDirect(t, "room", allocation.Grants[0], netip.MustParseAddrPort("192.0.2.103:4103"), 0xa3)
+				return client.data(1, []byte("stale")), client.endpoint
+			},
+		},
+		{
+			name: "Ping is not_bound",
+			want: store.RejectNotBound,
+			prepare: func(t testing.TB, fixture *storeFixture, allocation store.Allocation) ([]byte, netip.AddrPort) {
+				client := fixture.bindDirect(t, "room", allocation.Grants[0], netip.MustParseAddrPort("192.0.2.104:4104"), 0xa4)
+				return client.ping(1), client.endpoint
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newStoreFixture(t, store.DefaultLimits())
+			allocation := fixture.addRoom(t, "room", 1)
+			wire, endpoint := test.prepare(t, fixture, allocation)
+			if err := fixture.store.EndRoom("room"); err != nil {
+				t.Fatalf("EndRoom(): %v", err)
+			}
+			socket := new(fakeSocket)
+			relay, err := New(socket, fixture.store, Config{})
+			if err != nil {
+				t.Fatalf("New(): %v", err)
+			}
+			t.Cleanup(func() { _ = relay.Close() })
+
+			if err := relay.dispatch(wire, endpoint); err != nil {
+				t.Fatalf("dispatch(): %v", err)
+			}
+			counters := relay.Counters()
+			if counters.UDPReceived != 1 || counters.UDPDropped != 1 || dropTotal(counters.DropReasons) != 1 ||
+				dropCount(counters.DropReasons, test.want) != 1 || counters.DropReasons.Revoked != 0 {
+				t.Fatalf("retired credential counters = %#v", counters)
+			}
+			writes, deadlines, _, _ := socket.snapshot()
+			if len(writes) != 0 || len(deadlines) != 0 {
+				t.Fatalf("retired credential produced output: writes=%d deadlines=%d", len(writes), len(deadlines))
+			}
+			if _, err := fixture.store.GetRoom("room"); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetRoom() after stale traffic error = %v, want ErrNotFound", err)
 			}
 		})
 	}

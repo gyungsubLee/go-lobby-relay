@@ -73,12 +73,14 @@ Every received datagram follows exactly one charging class and produces at most 
 | Input after bounded structural/state inspection | Charging class | Replay action | Drop-reason priority |
 |---|---|---|---|
 | malformed, oversized/truncated, unsupported revision | pre-auth source + process; table-full exception is process-only | none | `rate_limited` if that admission fails, otherwise structural reason |
-| HELLO or AUTH, including unknown/expired/revoked/wrong-room/bad-HMAC cases | pre-auth source + process; exactly once before challenge/binding mutation | none | `rate_limited` if admission fails, otherwise the specific security/state reason |
-| ClientData/Ping with unknown binding, wrong IDs/endpoint, expired/revoked state, or bad HMAC | pre-auth source + process; exactly once | none | `rate_limited` if admission fails, otherwise the specific security/state reason |
+| HELLO or AUTH, including unknown/expired/known-revoked-before-retirement/wrong-room/bad-HMAC cases | pre-auth source + process; exactly once before challenge/binding mutation | none | `rate_limited` if admission fails, otherwise the surviving lookup/security reason |
+| ClientData/Ping with unknown binding, wrong IDs/endpoint, expired/known-revoked-before-retirement state, or bad HMAC | pre-auth source + process; exactly once | none | `rate_limited` if admission fails, otherwise the surviving lookup/security reason |
 | exact-endpoint, HMAC-valid ClientData/Ping with duplicate or too-old sequence | authenticated session + room + process; never pre-auth | replay window unchanged | `rate_limited` if ingress admission fails, otherwise `replay` |
 | exact-endpoint, HMAC-valid ClientData/Ping with fresh sequence | authenticated session + room + process; never pre-auth | consume the sequence even when ingress admission rejects | `rate_limited` on ingress rejection; otherwise continue to output/fan-out |
 
 The pre-auth charge occurs after the bounded `1,201`-byte read and the minimum inspection needed to choose a class, but before any challenge, binding, or fan-out mutation. This bounds admitted application state/output work; it does not claim to prevent kernel receive or bounded decode/HMAC CPU under line-rate traffic.
+
+Room DELETE follows ADR 0002: it atomically removes grant/candidate/binding indexes and zeroes secrets, derived keys, and endpoints before retaining only the room-ID tombstone. Revocation-caused retired credentials are therefore cause-counted by the post-zeroing lookup result: stale HELLO is `unknown_grant`, stale AUTH is `auth_failed`, stale ClientData/Ping is `not_bound`, and a pre-delete admitted fan-out value is rejected internally as `not_bound`. Each applicable UDP packet still uses pre-auth exactly once and produces exactly one input drop reason. The fixed `revoked` slot remains reserved defensive telemetry and is used only if a known revoked state is observable before credential retirement; this decision does not authorize a retained credential registry.
 
 ### Three atomic groups
 

@@ -130,7 +130,7 @@ deploy/relay.service
 5. ingress 성공 뒤 lock 밖에서 authoritative snapshot으로 `ServerData`를 marshal하고 output cap을 검사한다. 두 번째 exclusive lock은 generation/deadline을 재검사하고 현재 recipient 계산, room/process fan-out 원자 소비와 `netip.AddrPort` snapshot만 수행한다. 그 뒤 lock을 해제하고 best-effort write하며 ingress/fan-out token은 후속 실패에 환불하지 않는다.
 6. room별 goroutine, socket, channel, timer, retry queue가 없다. application queue 크기는 0이다.
 7. source address는 선택한 `udp4`/`udp6` family와 일치해야 하며 OS별 mapped-address 동작에 의존하지 않는다. 인증은 canonical exact `netip.AddrPort`로 비교하고 IP만 사용하지 않는다.
-8. 서버 monotonic 시간이 권위이며 만료 경계는 `now >= deadline`이다. 외부 `expires_at`은 그 deadline의 UTC 표현이고, 권한 거부는 sweep을 기다리지 않고 즉시 적용한다.
+8. 서버 monotonic 시간이 권위이며 만료 경계는 `now >= deadline`이다. HTTP `expires_at`은 그 deadline의 UTC 표현이다. CHALLENGE/BOUND의 `expires_unix_ms`는 Store 선형화 시점에 future인 authoritative deadline의 wall projection을 millisecond ceiling으로 표시하되, 권한 거부는 반올림하지 않은 exact monotonic deadline에서 sweep을 기다리지 않고 즉시 적용한다.
 9. rebind가 성공하기 전까지 기존 binding은 유효하며, 성공과 동시에 새 random binding ID/endpoint로 교체한다.
 10. 프로세스 재시작은 모든 room/grant/challenge/binding을 의도적으로 무효화한다.
 
@@ -351,7 +351,7 @@ scratch container에는 `curl`을 추가하지 않는다. Docker/VM health check
 
 `udp_received`는 socket read 한 건, `client_data_accepted`는 final admission을 통과한 입력 `ClientData` 한 건, `fanout_write_attempts/successes/errors`는 recipient write 한 건 단위다. `udp_dropped`는 admission 전에 한 reason으로 거부한 입력 datagram 수이며 항상 `sum(drop_reasons)`와 같다. post-admission recipient write 실패는 `fanout_write_errors`에만 들어가고 `udp_dropped`에는 들어가지 않는다.
 
-fixed input drop reason enum은 `malformed`, `oversized`, `unsupported_version`, `unknown_grant`, `auth_failed`, `replay`, `expired`, `revoked`, `wrong_room`, `wrong_endpoint`, `not_bound`, `rate_limited`, `fanout_limited`, `draining`이다.
+fixed input drop reason enum은 `malformed`, `oversized`, `unsupported_version`, `unknown_grant`, `auth_failed`, `replay`, `expired`, `revoked`, `wrong_room`, `wrong_endpoint`, `not_bound`, `rate_limited`, `fanout_limited`, `draining`이다. Room DELETE는 credential index와 secret/key/endpoint를 즉시 제거하므로 그 뒤 stale HELLO는 `unknown_grant`, stale AUTH는 `auth_failed`, stale ClientData/Ping은 `not_bound`로 한 번만 집계된다. `revoked`는 credential retirement 전에 known revoked state가 관찰되는 경우만을 위한 reserved defensive telemetry이며 retained-ID registry를 뜻하지 않는다.
 
 ## 5. Implemented UDP Protobuf wire contract
 
@@ -401,9 +401,9 @@ decoder는 unknown field, final body 없음, 잘못된 direction, 고정 길이 
 | packet | sequence | `auth_tag` | body 추가 규칙 |
 |---|---:|---|---|
 | `HELLO` | `0` | empty | grant/client nonce 각 16 bytes, total datagram 256~1200 bytes |
-| `CHALLENGE` | `0` | empty | candidate 16, server nonce 32, future expiry |
+| `CHALLENGE` | `0` | empty | candidate 16, server nonce 32, Store 선형화 시 future인 ceiling-ms expiry |
 | `AUTH` | `0` | exactly 32 bytes | candidate 16 |
-| `BOUND` | `0` | exactly 32 bytes | binding 16, future expiry |
+| `BOUND` | `0` | exactly 32 bytes | binding 16, Store 선형화 시 future인 ceiling-ms expiry |
 | `ClientData` | `>=1` | exactly 32 bytes | binding 16, payload 0~900 bytes |
 | `ServerData` | accepted sender sequence | empty | authoritative sender ID 1~64, payload 0~900 bytes |
 | `Ping` | `>=1` | exactly 32 bytes | binding 16 |
@@ -440,6 +440,8 @@ sequenceDiagram
 client는 64-byte room/session ID를 포함한 worst-case CHALLENGE보다 크게 HELLO가 **최소 256 bytes**가 되도록 zero-filled `padding`을 조절하며 server는 padding을 cap 검증 뒤 버리고 응답이나 HMAC transcript에 반영하지 않는다. server는 실제 CHALLENGE가 해당 accepted HELLO datagram보다 **strictly smaller**일 때만 보낸다. unknown, malformed, oversized, insufficiently padded, expired, rate-limited HELLO는 무응답이다. source rate limit이 반복 요청을 제한한다.
 
 handshake retry는 gameplay retry 비목표와 별개다. client는 한 attempt에서 같은 client nonce의 동일 HELLO를 100/200/400 ms bounded backoff+jitter로 challenge expiry 전까지 재전송한다. server는 같은 grant/room/session/nonce/endpoint의 duplicate HELLO에 기존 candidate와 동일 CHALLENGE를 반환하고 새 state를 만들지 않는다. 다른 nonce는 기존 candidate가 만료된 뒤에만 새 attempt로 받으며 그 전에는 침묵한다. duplicate AUTH는 recent-completed record가 challenge TTL 안이고 같은 endpoint·candidate이며 그 record의 binding ID/generation이 여전히 current이고 room/grant/binding deadline이 future일 때만 state transition 없이 같은 BOUND를 재전송한다. record는 rebind, binding/grant/room expiry·revoke 또는 TTL에 제거된다. client는 BOUND timeout 뒤 fresh nonce로 전체 handshake를 다시 시작하며, session마다 pending candidate와 recent-completed record는 각각 최대 1개다.
+
+CHALLENGE/BOUND wire expiry는 Store가 handshake mutation을 선형화한 같은 injected Wall+Mono reading으로 authoritative monotonic deadline을 wall time에 project한 뒤 millisecond 단위로 ceiling한다. 따라서 live authority가 `1ns`만 남아도 wire 값은 선형화 시점의 `now_ms + 1`이고, BOUND tag는 그 exact advertised 값을 인증한다. Internal challenge/binding authority는 projection과 무관하게 반올림하지 않은 monotonic deadline에서 끝나며 codec은 이미 권위를 판정한 server envelope에 대해 `expires_unix_ms > 0`만 구조적으로 검증한다.
 
 ### 5.4 Implemented canonical HMAC와 accepted replay contract
 
@@ -508,7 +510,7 @@ v1에는 `LEAVE` packet이나 participant mutation endpoint가 없다. client so
 - 논리적으로 terminal이지만 pre-sweep인 room/grant는 `Expire` 또는 그 state를 직접 다루는 operation의 cleanup이 해제할 때까지 `max_rooms`/`max_active_sessions` counter를 계속 소비한다. 이로 인한 보수적 admission 지연은 최대 한 `1s` sweep이고 권한을 연장하지 않는다. 관련 없는 `CreateRoom`은 다른 record를 스캔해 counter를 lazy reclaim하지 않는다.
 - sweeper 하나가 승인된 `1s` interval마다 `Expire(now)`를 호출한다. per-room/session timer는 없다.
 - challenge, binding, grant, room 순서로 만료하고 관련 reverse index를 같은 lock 안에서 제거한다.
-- DELETE는 즉시 grant/challenge/binding을 revoke하고 secret-bearing state를 제거한 뒤 room을 bounded tombstone으로 바꾼다.
+- DELETE는 즉시 grant/challenge/binding index와 secret-bearing state를 제거한 뒤 room을 bounded tombstone으로 바꾼다. 그 뒤 retired credential은 남아 있는 lookup 결과로 분류되어 stale HELLO/AUTH/ClientData·Ping이 각각 `unknown_grant`/`auth_failed`/`not_bound`, pre-delete admitted fan-out value가 `not_bound`가 되며 어떤 credential state도 되살리지 않는다.
 - tombstone은 room ID와 terminal/tombstone deadline만 보존하고 participant, grant secret, key, endpoint와 payload를 보존하지 않는다.
 - open room record를 tombstone으로 in-place 전환하므로 DELETE가 record 수를 늘리지 않는다. `max_room_records=4096`은 open뿐 아니라 empty grace 대기, 논리적 terminal/pre-sweep와 tombstone을 포함한 모든 non-absent `roomsByID` resident record를 계산한다. 한도에서는 새 PUT을 `capacity_exceeded`로 거부한다.
 - room TTL physical cleanup은 논리적 deadline 후 최대 한 sweep, 즉 `1s` 안에 완료한다.
@@ -526,7 +528,7 @@ fan-out cost는 planned recipient 수와 `output_bytes * planned_recipient_count
 
 `ClientData` admission은 다음 순서로 선형화한다: bounded parse → exclusive-lock binding generation/exact endpoint/room·session/deadline/HMAC 검사 → replay freshness 분류 → authenticated session+room+process ingress group preflight → fresh sequence는 ingress 허용 여부와 무관하게 소비하고, replay packet은 window를 바꾸지 않음 → ingress group이 허용되면 원자 소비하고 authoritative sender snapshot 반환 → lock 밖 `ServerData` marshal과 exact output cap 검사 → exclusive-lock generation/deadline 재검사 → 현재 recipient 계산 → room+process fan-out group 원자 소비 및 endpoint snapshot → lock 해제 → best-effort writes. output/fan-out/concurrent lifecycle drop은 ingress를 환불하지 않는다. fan-out group rejection은 fan-out token을 소비하지 않는다. `Ping`도 같은 HMAC/replay/authenticated-ingress 규칙을 사용하지만 marshal/fan-out 단계는 없다.
 
-Malformed/oversized/unsupported, HELLO/AUTH, unknown/wrong/expired/revoked/bad-HMAC bound-like input은 각각 pre-auth group을 정확히 한 번 사용하며 authenticated group과 이중 과금하지 않는다. 대응 group이 거부하면 `rate_limited`가 원래 drop reason보다 우선하고, 허용되면 원래 bounded reason을 기록한다. HMAC-valid duplicate/too-old ClientData/Ping은 authenticated ingress를 시도하고, 성공 시 token을 소비한 뒤 `replay`로 drop한다. 모든 rejected/dropped input datagram은 정확히 한 `drop_reasons` key에만 합산되고 성공 input은 어떤 drop reason에도 합산되지 않는다. over-cap/truncated datagram은 원래 길이를 알 수 없으면 관찰 가능한 `1201` bytes를 pre-auth byte cost로 사용한다.
+Malformed/oversized/unsupported, HELLO/AUTH, unknown/wrong/expired/known-revoked-before-retirement/bad-HMAC bound-like input은 각각 pre-auth group을 정확히 한 번 사용하며 authenticated group과 이중 과금하지 않는다. DELETE가 즉시 credential을 retire한 뒤에는 stale HELLO/AUTH/ClientData·Ping을 surviving lookup reason인 `unknown_grant`/`auth_failed`/`not_bound`로 과금·집계하고 `revoked`는 known revoked state가 retirement 전에 관찰될 때만 사용한다. 대응 group이 거부하면 `rate_limited`가 원래 drop reason보다 우선하고, 허용되면 원래 bounded reason을 기록한다. HMAC-valid duplicate/too-old ClientData/Ping은 authenticated ingress를 시도하고, 성공 시 token을 소비한 뒤 `replay`로 drop한다. 모든 rejected/dropped input datagram은 정확히 한 `drop_reasons` key에만 합산되고 성공 input은 어떤 drop reason에도 합산되지 않는다. over-cap/truncated datagram은 원래 길이를 알 수 없으면 관찰 가능한 `1201` bytes를 pre-auth byte cost로 사용한다.
 
 ## 7. Security threat boundary
 

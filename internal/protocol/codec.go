@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"errors"
-	"time"
 
 	relayv1 "github.com/gyungsubLee/go-game-relay/gen/go/relay/v1"
 	"google.golang.org/protobuf/proto"
@@ -66,7 +65,7 @@ func EncodeServer(envelope *relayv1.Envelope) ([]byte, error) {
 	if err := validateEnvelope(envelope); err != nil {
 		return nil, err
 	}
-	if err := validateServer(envelope, time.Now().UnixMilli()); err != nil {
+	if err := validateServer(envelope); err != nil {
 		return nil, err
 	}
 
@@ -129,19 +128,19 @@ func validateClient(envelope *relayv1.Envelope, datagramBytes int) error {
 	return nil
 }
 
-func validateServer(envelope *relayv1.Envelope, nowUnixMilli int64) error {
+func validateServer(envelope *relayv1.Envelope) error {
 	switch body := envelope.Body.(type) {
 	case *relayv1.Envelope_Challenge:
 		if body == nil || body.Challenge == nil || len(body.Challenge.ProtoReflect().GetUnknown()) != 0 ||
 			envelope.Sequence != 0 || len(envelope.AuthTag) != 0 ||
 			len(body.Challenge.CandidateId) != 16 || len(body.Challenge.ServerNonce) != 32 ||
-			body.Challenge.ExpiresUnixMs <= nowUnixMilli {
+			body.Challenge.ExpiresUnixMs <= 0 {
 			return errMalformed
 		}
 	case *relayv1.Envelope_Bound:
 		if body == nil || body.Bound == nil || len(body.Bound.ProtoReflect().GetUnknown()) != 0 ||
 			envelope.Sequence != 0 || len(envelope.AuthTag) != 32 ||
-			len(body.Bound.BindingId) != 16 || body.Bound.ExpiresUnixMs <= nowUnixMilli {
+			len(body.Bound.BindingId) != 16 || body.Bound.ExpiresUnixMs <= 0 {
 			return errMalformed
 		}
 	case *relayv1.Envelope_ServerData:

@@ -415,7 +415,7 @@ func (store *Store) BeginChallenge(request ChallengeRequest) (ChallengeResult, R
 	result := ChallengeResult{
 		CandidateID:   candidateID,
 		ServerNonce:   serverNonce,
-		ExpiresUnixMS: reading.Wall.Add(deadline - reading.Mono).UTC().UnixMilli(),
+		ExpiresUnixMS: projectWireExpiryUnixMS(reading, deadline),
 	}
 	grant.pending = &challengeRecord{
 		candidateID: candidateID,
@@ -507,7 +507,7 @@ func (store *Store) Authenticate(request AuthenticateRequest) (BoundResult, Reje
 		pending.candidateID, pending.clientNonce, pending.serverNonce)
 	deadline := saturatingAdd(reading.Mono, store.limits.BindingTTL)
 	deadline = min(deadline, grant.monoDeadline, room.monoDeadline)
-	expiresUnixMS := reading.Wall.Add(deadline - reading.Mono).UTC().UnixMilli()
+	expiresUnixMS := projectWireExpiryUnixMS(reading, deadline)
 	result := BoundResult{
 		BindingID:     bindingID,
 		ExpiresUnixMS: expiresUnixMS,
@@ -674,6 +674,15 @@ func sourceKey(endpoint netip.AddrPort) netip.Prefix {
 
 func limiterTime(now time.Duration) time.Time {
 	return time.Unix(0, int64(now))
+}
+
+func projectWireExpiryUnixMS(reading ClockReading, deadline time.Duration) int64 {
+	expiry := reading.Wall.Add(deadline - reading.Mono)
+	milliseconds := expiry.UnixMilli()
+	if expiry.Nanosecond()%int(time.Millisecond) != 0 {
+		milliseconds++
+	}
+	return milliseconds
 }
 
 func (store *Store) expireRelay(grant *grantRecord, now time.Duration) {

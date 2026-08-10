@@ -287,6 +287,20 @@ func TestEncodeServerAcceptsServerPacketsDeterministically(t *testing.T) {
 	}
 }
 
+func TestEncodeServerAcceptsPositiveExpiryIndependentOfHostWall(t *testing.T) {
+	for _, envelope := range []*relayv1.Envelope{validChallenge(), validBound()} {
+		switch body := envelope.Body.(type) {
+		case *relayv1.Envelope_Challenge:
+			body.Challenge.ExpiresUnixMs = 1
+		case *relayv1.Envelope_Bound:
+			body.Bound.ExpiresUnixMs = 1
+		}
+		if _, err := EncodeServer(envelope); err != nil {
+			t.Errorf("EncodeServer(%T, positive host-past expiry) error = %v", envelope.Body, err)
+		}
+	}
+}
+
 func TestEncodeServerRejectsInvalidPackets(t *testing.T) {
 	type rejectCase struct {
 		name     string
@@ -334,9 +348,9 @@ func TestEncodeServerRejectsInvalidPackets(t *testing.T) {
 	challengeZeroExpiry := cloneEnvelope(t, validChallenge())
 	challengeZeroExpiry.GetChallenge().ExpiresUnixMs = 0
 	add("CHALLENGE zero expiry", challengeZeroExpiry, ReasonMalformed)
-	challengePastExpiry := cloneEnvelope(t, validChallenge())
-	challengePastExpiry.GetChallenge().ExpiresUnixMs = 1
-	add("CHALLENGE past expiry", challengePastExpiry, ReasonMalformed)
+	challengeNegativeExpiry := cloneEnvelope(t, validChallenge())
+	challengeNegativeExpiry.GetChallenge().ExpiresUnixMs = -1
+	add("CHALLENGE negative expiry", challengeNegativeExpiry, ReasonMalformed)
 	for _, size := range []int{15, 17} {
 		candidate := cloneEnvelope(t, validChallenge())
 		candidate.GetChallenge().CandidateId = repeatedByte(size, 0x61)
@@ -360,9 +374,9 @@ func TestEncodeServerRejectsInvalidPackets(t *testing.T) {
 	boundZeroExpiry := cloneEnvelope(t, validBound())
 	boundZeroExpiry.GetBound().ExpiresUnixMs = 0
 	add("BOUND zero expiry", boundZeroExpiry, ReasonMalformed)
-	boundPastExpiry := cloneEnvelope(t, validBound())
-	boundPastExpiry.GetBound().ExpiresUnixMs = 1
-	add("BOUND past expiry", boundPastExpiry, ReasonMalformed)
+	boundNegativeExpiry := cloneEnvelope(t, validBound())
+	boundNegativeExpiry.GetBound().ExpiresUnixMs = -1
+	add("BOUND negative expiry", boundNegativeExpiry, ReasonMalformed)
 	serverDataSequence := cloneEnvelope(t, validServerData())
 	serverDataSequence.Sequence = 0
 	add("ServerData sequence mismatch", serverDataSequence, ReasonMalformed)

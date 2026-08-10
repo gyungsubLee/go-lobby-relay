@@ -158,7 +158,7 @@ v1의 committed product milestone은 정확히 다음 둘이다. Phase는 구현
 - [ ] **RELY-03**: 실패하거나 느린 수신자는 global receive loop를 무기한 막거나 queue, goroutine 또는 메모리를 무한히 증가시키지 않으며 해당 실패는 bounded reason으로 집계된다.
 - [ ] **SAFE-01**: 서버는 HTTP body, 룸 수, 룸 정원, 활성 세션, grant TTL, metadata와 UDP 데이터그램 크기의 명시적 hard limit을 mutation 또는 fan-out 전에 적용한다.
 - [ ] **SAFE-02**: 서버는 인증 전 source, 인증된 세션, 룸과 프로세스 전체에 packet·byte·fan-out budget을 적용하여 한 발신자가 다른 룸을 고갈시키지 못하게 한다.
-- [ ] **SAFE-03**: malformed, oversized, unsupported-version, expired, revoked, wrong-room 및 rate-limited 입력은 panic이나 cross-room state mutation 없이 폐기되고 원인별로 집계된다.
+- [ ] **SAFE-03**: malformed, oversized, unsupported-version, expired, wrong-room, rate-limited 및 revocation-caused stale 입력은 panic이나 cross-room state mutation 없이 폐기되고 원인별로 집계된다. Room DELETE가 credential index와 secret-bearing state를 즉시 제거한 뒤 stale HELLO/AUTH/ClientData·Ping은 surviving lookup reason인 `unknown_grant`/`auth_failed`/`not_bound`로 집계하며, fixed `revoked` slot은 credential retirement 전에 known revoked state가 관찰되는 경우만을 위한 reserved defensive telemetry다.
 
 ### 6.4 M1 — Unity 네이티브 사용자 증명 `[기능·호환성, 3개]`
 

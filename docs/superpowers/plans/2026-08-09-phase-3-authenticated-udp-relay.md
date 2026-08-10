@@ -185,7 +185,7 @@ Cover first sequence, increasing sequence, duplicate, `highest-63`, unseen out-o
 
 - [ ] **Step 2: Write HELLO/CHALLENGE tests**
 
-Cover live/expired/revoked/unknown grant, wrong room/session, exact endpoint, one pending challenge per session, same nonce+endpoint idempotent CHALLENGE, different nonce while pending silent rejection, exact `3s` deadline, one recent-completed record, source/global pre-auth boundary, table `4096`/full behavior, IPv4 `/32` and IPv6 `/64`, idle removal, and no response data containing grant secret. Prove that rejected and rate-limited pre-auth datagrams refresh an existing source's `last_observed` without partial token consumption or a burst reset, while a table-full new source creates no record. Test access before the sweeper at `last_observed+60s-1ns`, exact `+60s`, and `+60s+1ns`: the first remains and refreshes the existing record, while exact/after lazily remove it before following the new-source path. After a successful AUTH, a fresh-nonce HELLO may start a new rebind immediately while the old recent-completed record remains available only for its duplicate AUTH; a newer completion replaces it.
+Cover live/expired/unknown grant, wrong room/session, exact endpoint, one pending challenge per session, same nonce+endpoint idempotent CHALLENGE, different nonce while pending silent rejection, exact `3s` deadline, one recent-completed record, source/global pre-auth boundary, table `4096`/full behavior, IPv4 `/32` and IPv6 `/64`, idle removal, and no response data containing grant secret. After room DELETE retires the credential indexes, prove that stale HELLO is `unknown_grant` rather than retaining a revoked-grant lookup. Prove that rejected and rate-limited pre-auth datagrams refresh an existing source's `last_observed` without partial token consumption or a burst reset, while a table-full new source creates no record. Test access before the sweeper at `last_observed+60s-1ns`, exact `+60s`, and `+60s+1ns`: the first remains and refreshes the existing record, while exact/after lazily remove it before following the new-source path. After a successful AUTH, a fresh-nonce HELLO may start a new rebind immediately while the old recent-completed record remains available only for its duplicate AUTH; a newer completion replaces it.
 
 CSPRNG fixtures cover exact 16-byte candidate ID, 32-byte server nonce, collision success on draw 9, collision exhaustion, and short/error reads with no partial state. Reuse the existing scripted reader pattern.
 
@@ -252,7 +252,7 @@ Prove separately atomic groups:
 - fan-out rejection consumes no fan-out token;
 - rate/output/fan-out rejection consumes a fresh replay sequence;
 - failed HMAC does not advance it; duplicate/too-old packets use authenticated ingress once but do not advance it;
-- malformed/oversized/unsupported, HELLO/AUTH failures, unknown/wrong/expired/revoked/bad-HMAC packets use pre-auth exactly once and never authenticated admission;
+- malformed/oversized/unsupported, HELLO/AUTH failures, unknown/wrong/expired/known-revoked-before-retirement/bad-HMAC packets use pre-auth exactly once and never authenticated admission; retired credentials after DELETE map stale HELLO/AUTH/ClientData·Ping to `unknown_grant`/`auth_failed`/`not_bound`, while `revoked` remains reserved unless a known revoked state is observable before retirement;
 - a full-table new source consumes only process-global when available, creates no state, and drops `rate_limited`;
 - rejected and rate-limited pre-auth attempts refresh only an existing source's `last_observed`, do not reset its limiter burst, and defer idle eviction from that observation;
 - admission failure makes `rate_limited` win over the underlying reason, otherwise the underlying bounded reason is kept.
@@ -261,11 +261,11 @@ Use the installed `golang.org/x/time/rate`. Under `Store.mu`, preflight all memb
 
 - [ ] **Step 2: Write recipient and isolation tests**
 
-Cover sender exclusion; live and bound same-room recipients only; authoritative participant identity; empty recipient snapshot; wrong room/session/binding/source; expired/revoked/unbound recipients; two rooms under concurrent traffic; one session/room hitting its limit while another still passes; and session limiter continuity after rebind.
+Cover sender exclusion; live and bound same-room recipients only; authoritative participant identity; empty recipient snapshot; wrong room/session/binding/source; expired/terminal/unbound recipients; a pre-delete admitted value rejected as `not_bound` after EndRoom; two rooms under concurrent traffic; one session/room hitting its limit while another still passes; and session limiter continuity after rebind.
 
 - [ ] **Step 3: Extend expiry/DELETE and churn tests**
 
-At room, grant, challenge, recent-completed, and binding exact deadlines, assert immediate authority denial. `EndRoom` and `Expire` must zero and remove candidate nonce, derived key, binding ID, endpoint, replay, and limiter/index state before tombstoning. Extend the existing invariant checker and `1,000` lifecycle cycles so all new indexes/counters return to baseline.
+At room, grant, challenge, recent-completed, and binding exact deadlines, assert immediate authority denial. `EndRoom` and `Expire` must zero and remove candidate nonce, derived key, binding ID, endpoint, replay, and limiter/index state before tombstoning. After EndRoom, assert stale HELLO=`unknown_grant`, AUTH=`auth_failed`, ClientData/Ping=`not_bound`, and pre-delete admitted fan-out=`not_bound`, with each applicable pre-auth/drop charged exactly once and no response or state resurrection. Extend the existing invariant checker and `1,000` lifecycle cycles so all new indexes/counters return to baseline.
 
 - [ ] **Step 4: Implement, race, and commit**
 
@@ -298,7 +298,7 @@ git commit -m "feat(store): admit bounded relay traffic"
 Cover every client packet kind and fixed drop reason. Assert:
 
 - receive slice is `1201` bytes and a full `1201`-byte read is `oversized`;
-- malformed/unsupported/unknown/expired/revoked/wrong endpoint/bad HMAC/replay/rate/fan-out input gets exactly one reason and no panic;
+- malformed/unsupported/unknown/expired/wrong endpoint/bad HMAC/replay/rate/fan-out input gets exactly one reason and no panic; retired credentials after DELETE use `unknown_grant`/`auth_failed`/`not_bound`, while the fixed `revoked` counter remains reserved for an observable known-revoked state before retirement;
 - unknown or rejected pre-auth input is silent;
 - CHALLENGE bytes are strictly smaller than HELLO bytes;
 - CHALLENGE and BOUND set a fresh write deadline before their one write;
@@ -446,7 +446,7 @@ Expected: clean before/after, all commands exit `0`, and `out/relay` is ignored 
 
 - [ ] **Step 2: Record exact secret-free evidence**
 
-Evidence names source SHA, accepted ADRs, Go version, exact commands/exits, replay matrix, handshake/rebind/cleanup deadlines, all D-04 equality/one-over results, source table cap/churn, same/cross-room tests, real loopback result, write-error/no-retry result, race/fuzz/vet result, no-runtime-secret/payload-log checks, and single-binary composition. It carries forward Phase 2's management-handler result and adds the static control/store/relay no-logging gate plus captured CLI token-output check. It contains no operator token, grant, key, nonce, payload, ID, or endpoint value.
+Evidence names source SHA, accepted ADRs, Go version, exact commands/exits, replay matrix, handshake/rebind/cleanup deadlines, the post-zeroing retired-credential mapping (`unknown_grant`/`auth_failed`/`not_bound`) with reserved `revoked` coverage, all D-04 equality/one-over results, source table cap/churn, same/cross-room tests, real loopback result, write-error/no-retry result, race/fuzz/vet result, no-runtime-secret/payload-log checks, and single-binary composition. It carries forward Phase 2's management-handler result and adds the static control/store/relay no-logging gate plus captured CLI token-output check. It contains no operator token, grant, key, nonce, payload, ID, or endpoint value.
 
 - [ ] **Step 3: Update only owned status**
 
@@ -478,7 +478,7 @@ test -z "$(git status --porcelain=v1 --untracked-files=all)"
 | RELY-03 | Task 4 deadline, first-error stop, no queue/goroutine |
 | SAFE-01 | Tasks 2–5 state/datagram/config hard limits |
 | SAFE-02 | Tasks 1 and 3 exact layered admission/fan-out policy |
-| SAFE-03 | Tasks 3–6 negative taxonomy, counters, fuzz, race |
+| SAFE-03 | Tasks 3–6 post-zeroing lookup taxonomy, reserved `revoked` slot, counters, fuzz, race |
 
 ## Explicit exclusions
 
