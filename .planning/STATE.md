@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-08-08)
 Phase: 3 of 7 (Authenticated UDP Relay)
 Plan: 0 of 1 in current phase
 Status: Blocked — the reviewed D-04 proposal is documented but owner approval is required before Phase 3 implementation
-Last activity: 2026-08-09 — prepared [proposed ADR 0003](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md), the [Phase 3 plan](../docs/superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md), and the [Phase 4 plan](../docs/superpowers/plans/2026-08-09-phase-4-unity-native-integration.md) after Phase 2 verification
+Last activity: 2026-08-10 — replaced remote BSR generation with checksum-pinned local generators in `b8c6806`, verified failure preservation and byte-identical Go/C# output, and rebuilt the corrupted ignored Go build cache; Phase 3 still awaits explicit D-04 approval
 
 Progress: [███░░░░░░░] 29%
 
@@ -62,6 +62,7 @@ Decisions are logged in PROJECT.md Key Decisions table and authoritative ADRs.
 - [Phase 2]: ROOM-01, ROOM-02, and SESS-01 passed on the clean source candidate; ROOM-03 and SAFE-01 remain assigned to Phase 3. See [Phase 2 evidence](../docs/evidence/m1/phase-2.md).
 - [D-04 proposed]: [ADR 0003](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md) adds a process-global pre-auth budget to the reviewed source/session/room/process/fan-out profile and separates pre-auth, authenticated-ingress, and fan-out atomic charging. It remains unapproved; Product, Security, and Operations owner approval is required before Phase 3 implementation.
 - [M1 composition]: Phase 3 owns the minimum single `cmd/relay` binary needed by the Phase 4 proof; Phase 5 still owns complete configuration precedence, status, structured operations, drain, and runbook behavior.
+- [Local code generation]: Buf 1.72.0 now invokes workspace-local `protoc` 35.1 and `protoc-gen-go` 1.36.11 through staged output replacement. The accepted generated hashes remain unchanged, and the historical Phase 1 BSR evidence remains intact. See [design](../docs/superpowers/specs/2026-08-10-local-protobuf-codegen-design.md) and commit `b8c6806`.
 
 ### Pending Todos
 
@@ -85,6 +86,6 @@ Decisions are logged in PROJECT.md Key Decisions table and authoritative ADRs.
 
 ## Session Continuity
 
-Last session: 2026-08-09
-Stopped at: Phase 2 verified; reviewed Phase 3/4 plans written; Phase 3 implementation awaits explicit D-04 approval
+Last session: 2026-08-10
+Stopped at: Local code generation and build-cache recovery verified; Phase 3 Task 1 awaits explicit D-04 approval
 Resume file: docs/decisions/0003-m1-udp-admission-and-fanout-policy.md
