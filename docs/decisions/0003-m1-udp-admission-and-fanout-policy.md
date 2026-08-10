@@ -1,12 +1,13 @@
 # ADR 0003: M1 UDP admission and fan-out policy
 
-- **Status:** Proposed — explicit owner approval required before Phase 3 implementation
+- **Status:** Accepted
 - **Date:** 2026-08-09
+- **Acceptance provenance:** 2026-08-10 — the owner replied “승인해줘” directly to the approval request that enumerated `D04-M1-NORMAL`, all seven limit rows, the source/challenge/binding/write lifecycle, the three atomic charging groups with no refund/replay consumption, and the maximum-capacity/maximum-payload non-guarantee.
 - **Decision owners:** Product, Protocol/Security, Operations
 - **Related requirements:** ROOM-03, SESS-02, SESS-03, SESS-04, RELY-01, RELY-02, RELY-03, SAFE-01, SAFE-02, SAFE-03
 - **Implementation plan:** [Phase 3 authenticated UDP Relay plan](../superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md)
 
-This document is the review-ready D-04 candidate. It fixes the numeric packet, byte, and fan-out policy needed by Phase 3, but it is **not accepted yet**. No Phase 3 code or requirement may claim these values until the Product, Security, and Operations owners explicitly approve this ADR.
+This accepted D-04 decision fixes the numeric packet, byte, and fan-out policy for Phase 3. Acceptance authorizes boundary tests and implementation planning; it does not mean any Phase 3 code or requirement is complete.
 
 ## Context and named normal profile
 
@@ -25,7 +26,7 @@ The candidate normal profile is `D04-M1-NORMAL`:
 
 Derived conservative load is `640 packets/s`, `327,680 input bytes/s`, `1,920 recipient writes/s`, and `983,040 output bytes/s`. The `512-byte` value exists only to size the policy. Runtime accounting always charges exact observed datagram and marshalled output lengths.
 
-## Proposed compiled defaults and hard maxima
+## Accepted compiled defaults and hard maxima
 
 | Scope | Packet/write rate | Burst | Byte rate | Byte burst |
 |---|---:|---:|---:|---:|
@@ -41,7 +42,7 @@ Every rate and burst above is both the compiled default and hard maximum. Later 
 
 The authenticated session, room, process, and fan-out limits are exactly `2x` the named conservative normal profile at their respective scopes. The pre-auth process limit is eight source limits, so one unbound source can consume at most `12.5%` of that process budget. One authenticated session can consume at most `3.125%` of the authenticated process budget, and one four-player room at most `12.5%`.
 
-## Proposed bounded UDP lifecycle values
+## Accepted bounded UDP lifecycle values
 
 | Contract | Proposed value |
 |---|---:|
@@ -57,7 +58,7 @@ The authenticated session, room, process, and fan-out limits are exactly `2x` th
 
 Each challenge, recent-completed handshake, binding, endpoint, derived-key, and replay-state family is attached at most once to each of the no-more-than-`4,096` live sessions. There is no independent registry whose cardinality can exceed the live-session ceiling.
 
-## Proposed admission and accounting semantics
+## Accepted admission and accounting semantics
 
 ### Classification and charging
 
@@ -109,17 +110,17 @@ The groups are intentionally not one transaction. Once authenticated ingress pas
 
 The existing room capacity `16` is a memory/safety maximum, not a throughput promise. A 16-player room sending the measured worst-case `1,103-byte` ClientData at `20 Hz` would request about `320 packets/s`, `352,960 input B/s`, `4,800 fan-out writes/s`, and `5,361,600 output B/s`, above several proposed room budgets. Even a four-player room at maximum payload reaches the room fan-out byte ceiling at about `18.33 Hz/player`.
 
-Therefore the compiled defaults are sized to admit the named `D04-M1-NORMAL` policy envelope; an operator choosing lower values also chooses a smaller envelope. This proposal does not admit `16 players × 900-byte payload × 20 Hz`. Phase 7 still owns measured capacity, loss, latency, CPU, and RSS claims.
+Therefore the compiled defaults are sized to admit the named `D04-M1-NORMAL` policy envelope; an operator choosing lower values also chooses a smaller envelope. This accepted decision does not admit `16 players × 900-byte payload × 20 Hz`. Phase 7 still owns measured capacity, loss, latency, CPU, and RSS claims.
 
 These application budgets bound admitted state mutation and fan-out work. They do not guarantee fairness under line-rate NIC, kernel, routing, or distributed DDoS saturation. An existing source can retain its fixed-table entry by sending at least one pre-auth datagram per idle interval, so the `4,096` cap bounds memory but does not guarantee new-source availability during table fill. Host firewall/qdisc/provider protection remains an external operating boundary, while the additional pre-auth process bucket prevents application state work from scaling with all 4,096 source buckets.
 
-## Approval gate
+## Acceptance record
 
-To accept D-04, the owner must explicitly approve:
+The owner approved D-04 on 2026-08-10 with the provenance recorded above. The accepted scope was:
 
 1. `D04-M1-NORMAL` and the seven limit rows;
 2. the source/challenge/binding/write lifecycle table;
 3. the three-stage charging, no-refund, and replay-consumption semantics;
 4. the explicit non-guarantee for maximum-capacity, maximum-payload traffic.
 
-After approval, change this ADR status to `Accepted`, record approval provenance, update the PRD/TRD decision registries, and only then write Phase 3 boundary tests or implementation.
+PRD, TRD, and project state record this as `[D-04 accepted]`. All ten Phase 3 requirements remain pending until their implementation and verification evidence exists.

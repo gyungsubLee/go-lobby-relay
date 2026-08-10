@@ -8,9 +8,9 @@
 
 **Requirements owned:** ROOM-03, SESS-02, SESS-03, SESS-04, RELY-01, RELY-02, RELY-03, SAFE-01, SAFE-02, SAFE-03.
 
-**Status:** Planned but blocked — [ADR 0003](../../decisions/0003-m1-udp-admission-and-fanout-policy.md) is `Proposed`; no boundary test or implementation task may start until the owner explicitly accepts D-04.
+**Status:** Planned — [ADR 0003](../../decisions/0003-m1-udp-admission-and-fanout-policy.md) is accepted as D-04 on 2026-08-10; no Phase 3 boundary test or implementation is complete, and all ten Phase 3 requirements remain pending.
 
-**Milestone boundary correction:** Phase 3 owns the minimum runnable `cmd/relay` needed by M1: fixed/default listeners and limits, required operator secret, HTTP + UDP + sweeper composition, context cancellation, and clean joining. Phase 5 still owns full flag/env/file precedence, private status, structured operational logs, drain semantics, signal deadlines, and the production runbook.
+**Milestone boundary correction:** Phase 3 owns the minimum runnable `internal/server` + `cmd/relay` needed by M1: fixed/default listeners and limits, required operator secret, HTTP + UDP + sweeper composition, context cancellation, and clean joining. Phase 5 still owns OPS-01~04: full flag/env/file precedence, private status, structured operational logs, drain semantics, signal deadlines, and the production runbook.
 
 **Commit discipline:** Before every commit, stage only the task's owned paths, inspect `git diff --cached --name-only`, and require `git diff --cached --check` to exit `0`. Never use `git add .` in the shared worktree.
 
@@ -21,7 +21,7 @@
 Do not start Task 2 until all are true:
 
 1. Phase 1 protocol and Phase 2 room/session evidence remain green.
-2. The owner explicitly accepts all four approval items in ADR 0003.
+2. The owner explicitly accepted all four approval items in ADR 0003 on 2026-08-10.
 3. ADR 0003 status and PRD/TRD/STATE decision registries say `Accepted` without marking a Phase 3 requirement complete.
 
 The following contracts are already fixed and are not reopened here:
@@ -135,17 +135,17 @@ Do not implement the Phase 5 config-file model, status endpoint, drain state, st
 - Modify: `.planning/STATE.md`
 - Modify: this plan
 
-- [ ] **Step 1: Stop for explicit owner approval**
+- [x] **Step 1: Stop for explicit owner approval**
 
 Present ADR 0003 exactly. Approval must cover the named normal profile, seven limit rows, lifecycle table, three atomic groups/no-refund semantics, and maximum-capacity non-guarantee. “Continue” without reference to this decision is not approval.
 
-- [ ] **Step 2: Record acceptance without claiming implementation**
+- [x] **Step 2: Record acceptance without claiming implementation**
 
 Change ADR status to `Accepted`, record date/provenance, and update D-04 in PRD/TRD/STATE. Put the literal registry marker `[D-04 accepted]` beside ADR 0003 in each of those three files so the gate can verify them independently. Keep all ten Phase 3 requirements and Phase 3 itself pending.
 
 Also state that Phase 3 owns minimal `internal/server` + `cmd/relay`, while Phase 5 expands operations. Do not move OPS-01..04 into Phase 3.
 
-- [ ] **Step 3: Verify and commit only decision docs**
+- [x] **Step 3: Verify and commit only decision docs**
 
 ```bash
 rg -F -- '- **Status:** Accepted' docs/decisions/0003-m1-udp-admission-and-fanout-policy.md

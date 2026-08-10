@@ -15,7 +15,7 @@
 
 - [x] **Phase 1: Wire Contract and Threat Boundary** - Go와 Unity가 공유할 bounded wire contract와 재현 가능한 호환성 기준을 고정한다.
 - [x] **Phase 2: In-Memory Room and Session Kernel** - 인증된 room API와 grant·expiry·cleanup 수명주기를 단일 프로세스 메모리에서 완성한다.
-- [ ] **Phase 3: Authenticated UDP Relay** - endpoint 인증, replay 방지, same-room fan-out과 모든 admission limit을 갖춘 UDP Relay를 완성한다.
+- [ ] **Phase 3: Authenticated UDP Relay** - endpoint 인증, replay 방지, same-room fan-out과 모든 admission limit 및 최소 `internal/server` + `cmd/relay` 실행점을 갖춘 UDP Relay를 완성한다.
 - [ ] **Phase 4: Unity Native Integration** - 실제 Unity 네이티브 클라이언트가 입장, 교환, 중단과 네트워크 변경 복구를 증명한다.
 
 ### Milestone 2 — Single-Host Initial Operation
@@ -66,9 +66,9 @@
   3. 유효한 opaque payload는 byte-preserving 상태로 발신자를 제외한 같은 room의 활성·bound 참가자에게만 전달되고, delivery·ordering·deduplication·retry는 보장되지 않는다.
   4. HTTP·room·session·TTL·metadata·datagram hard limit과 source·session·room·global packet·byte·fan-out budget이 mutation과 fan-out 전에 적용되어 느린 수신자나 한 발신자가 loop, queue, goroutine 또는 memory를 무한히 늘리지 못한다.
   5. malformed, oversized, unsupported-version, replayed, expired, revoked, wrong-room 및 rate-limited 입력은 panic이나 cross-room mutation 없이 폐기되고 bounded reason으로 집계되며 grant와 game payload는 기록되지 않는다. 마지막 live grant/binding 뒤 endpoint를 포함한 모든 room 자원이 deadline 안에 정리된다.
-  6. 최소 `cmd/relay` 바이너리는 같은 인메모리 store에 management HTTP, UDP loop와 sweeper를 연결하고 context 취소 시 owned listener와 goroutine을 닫고 join하여 Phase 4의 단일-process native proof를 실행할 수 있다.
+  6. 최소 `internal/server` + `cmd/relay` 바이너리는 같은 인메모리 store에 management HTTP, UDP loop와 sweeper를 연결하고 context 취소 시 owned listener와 goroutine을 닫고 join하여 Phase 4의 단일-process native proof를 실행할 수 있다.
 **Plans:** 0/1 — [implementation plan](../docs/superpowers/plans/2026-08-09-phase-3-authenticated-udp-relay.md)
-**Decision gate:** [Proposed ADR 0003 — M1 UDP admission and fan-out policy](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md); explicit owner approval required before implementation
+**Decision:** **[D-04 accepted]** [ADR 0003 — M1 UDP admission and fan-out policy](../docs/decisions/0003-m1-udp-admission-and-fanout-policy.md) was explicitly approved on 2026-08-10. This authorizes implementation planning only; all ten Phase 3 requirements and Phase 3 remain pending.
 
 ### Phase 4: Unity Native Integration
 **Goal:** Unity PC·모바일 네이티브 클라이언트가 단일 Go Relay 프로세스에서 실제 연결 수명주기와 packet 교환을 완료할 수 있다.
@@ -91,7 +91,7 @@ Milestone 1은 Phase 1-4의 success criteria가 모두 충족되고 다음 통�
 - [ ] Redis, persistence, Kubernetes, Agones, Open Match runtime, WebGL, reliable transport 또는 authoritative simulation이 binary나 실행 경로에 포함되지 않는다.
 
 ### Phase 5: Single-Host Runtime Operations
-**Goal:** 운영자가 한 호스트의 Relay 프로세스를 안전하게 구성하고 상태를 판단하며 정해진 deadline 안에 종료할 수 있다.
+**Goal:** Phase 3의 최소 `internal/server` + `cmd/relay` 조립점을 운영자가 신뢰할 수 있는 full configuration precedence, private status, structured operations와 bounded shutdown으로 확장한다. OPS-01~04는 이 Phase에 남는다.
 **Mode:** mvp
 **Depends on:** Phase 4 (Milestone 1 complete)
 **Requirements:** OPS-01, OPS-02, OPS-03, OPS-04
