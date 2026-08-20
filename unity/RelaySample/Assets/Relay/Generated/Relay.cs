@@ -48,8 +48,8 @@ namespace Relay.V1 {
             "b2FkIloKClNlcnZlckRhdGESMgoVc2VuZGVyX3BhcnRpY2lwYW50X2lkGAEg",
             "ASgJUhNzZW5kZXJQYXJ0aWNpcGFudElkEhgKB3BheWxvYWQYAiABKAxSB3Bh",
             "eWxvYWQiJQoEUGluZxIdCgpiaW5kaW5nX2lkGAEgASgMUgliaW5kaW5nSWRC",
-            "SVo8Z2l0aHViLmNvbS9neXVuZ3N1YkxlZS9nby1nYW1lLXJlbGF5L2dlbi9n",
-            "by9yZWxheS92MTtyZWxheXYxqgIIUmVsYXkuVjFiBnByb3RvMw=="));
+            "Slo9Z2l0aHViLmNvbS9neXVuZ3N1YkxlZS9nby1sb2JieS1yZWxheS9nZW4v",
+            "Z28vcmVsYXkvdjE7cmVsYXl2MaoCCFJlbGF5LlYxYgZwcm90bzM="));
       descriptor = pbr::FileDescriptor.FromGeneratedCode(descriptorData,
           new pbr::FileDescriptor[] { },
           new pbr::GeneratedClrTypeInfo(null, null, new pbr::GeneratedClrTypeInfo[] {

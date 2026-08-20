@@ -1,4 +1,4 @@
-module github.com/gyungsubLee/go-game-relay
+module github.com/gyungsubLee/go-lobby-relay
 
 go 1.26.5
 

@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gyungsubLee/go-game-relay/internal/control"
-	"github.com/gyungsubLee/go-game-relay/internal/relay"
-	"github.com/gyungsubLee/go-game-relay/internal/store"
+	"github.com/gyungsubLee/go-lobby-relay/internal/control"
+	"github.com/gyungsubLee/go-lobby-relay/internal/relay"
+	"github.com/gyungsubLee/go-lobby-relay/internal/store"
 )
 
 var (

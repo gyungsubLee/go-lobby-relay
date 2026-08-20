@@ -38,7 +38,7 @@
 - Consumes: approved design `docs/superpowers/specs/2026-08-20-room-lobby-quick-match-design.md`.
 - Produces: module `github.com/gyungsubLee/go-lobby-relay`; 37 uniquely mapped requirements; Phases 4–5 pending for M1 and Phases 6–9 pending for M2.
 
-- [ ] **Step 1: Capture the stale-contract RED**
+- [x] **Step 1: Capture the stale-contract RED**
 
 Run:
 
@@ -48,7 +48,7 @@ rg -n 'Single-Binary Relay MVP|Unity Native Integration|6000\.3\.20f1|github.com
 
 Expected: matches show the obsolete repository identity, Unity-first Phase 4, and D-05 M1 blocker.
 
-- [ ] **Step 2: Apply the approved requirement and phase mapping**
+- [x] **Step 2: Apply the approved requirement and phase mapping**
 
 Use these exact new requirement owners:
 
@@ -76,7 +76,7 @@ MATCH-03: allocation failure rolls back selection without ticket loss; concurren
 
 Keep the existing 15 completed Phase 1–3 requirements complete. Mark all eight new M1 requirements pending until verified. Move Unity requirements to Phase 6 and remove D-05 as an M1 blocker.
 
-- [ ] **Step 3: Rename the Go module mechanically**
+- [x] **Step 3: Rename the Go module mechanically**
 
 Set:
 
@@ -86,7 +86,7 @@ module github.com/gyungsubLee/go-lobby-relay
 
 Replace all internal imports with that prefix. Do not change protocol package names or generated Protobuf namespaces.
 
-- [ ] **Step 4: Verify the document baseline**
+- [x] **Step 4: Verify the document baseline**
 
 Run:
 
@@ -98,7 +98,7 @@ make go-test
 
 Expected: first command has no stale product/module matches except historical evidence explicitly labeled historical; diff check and tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add go.mod cmd internal .planning docs/PRD.md docs/TRD.md docs/superpowers/plans/2026-08-09-phase-4-unity-native-integration.md

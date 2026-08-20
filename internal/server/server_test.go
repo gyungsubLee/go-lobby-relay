@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	relayv1 "github.com/gyungsubLee/go-game-relay/gen/go/relay/v1"
-	"github.com/gyungsubLee/go-game-relay/internal/protocol"
+	relayv1 "github.com/gyungsubLee/go-lobby-relay/gen/go/relay/v1"
+	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
 	"google.golang.org/protobuf/proto"
 )
 

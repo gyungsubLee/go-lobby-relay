@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	relayv1 "github.com/gyungsubLee/go-game-relay/gen/go/relay/v1"
-	"github.com/gyungsubLee/go-game-relay/internal/protocol"
-	"github.com/gyungsubLee/go-game-relay/internal/store"
+	relayv1 "github.com/gyungsubLee/go-lobby-relay/gen/go/relay/v1"
+	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
+	"github.com/gyungsubLee/go-lobby-relay/internal/store"
 )
 
 const (

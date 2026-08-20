@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gyungsubLee/go-game-relay/internal/protocol"
-	"github.com/gyungsubLee/go-game-relay/internal/store"
+	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
+	"github.com/gyungsubLee/go-lobby-relay/internal/store"
 	"golang.org/x/time/rate"
 )
 

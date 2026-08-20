@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/gyungsubLee/go-game-relay/internal/protocol"
+	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
 	"golang.org/x/time/rate"
 )
 

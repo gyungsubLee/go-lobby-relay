@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gyungsubLee/go-game-relay/internal/protocol"
+	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
 )
 
 var testWall = time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)

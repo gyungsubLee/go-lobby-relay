@@ -13,8 +13,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/gyungsubLee/go-game-relay/internal/control"
-	"github.com/gyungsubLee/go-game-relay/internal/server"
+	"github.com/gyungsubLee/go-lobby-relay/internal/control"
+	"github.com/gyungsubLee/go-lobby-relay/internal/server"
 )
 
 var errStartup = errors.New("relay: startup failed")
