@@ -6,7 +6,7 @@
 
 ## Milestones
 
-- [ ] **Milestone 1 — Room/Lobby & Quick Match MVP** (Phases 1–5)
+- [x] **Milestone 1 — Room/Lobby & Quick Match MVP** (Phases 1–5) — Complete 2026-08-20
 - [ ] **Milestone 2 — Client Integration & Single-Host Operation** (Phases 6–9)
 
 ## Phase Details
@@ -77,9 +77,11 @@
 4. successful start만 기존 Relay room과 caller-private assignment를 만든다.
 5. focused, concurrent, race와 HTTP integration tests가 통과한다.
 
-**Status:** Planned — implementation pending
+**Status:** Complete — 2026-08-20
 
 **Plan:** [M1 Phase 4–5 plan](../docs/superpowers/plans/2026-08-20-room-lobby-quick-match-m1.md)
+
+**Evidence:** [Phase 4 evidence](../docs/evidence/m1/phase-4.md)
 
 ### Phase 5: Quick Match and Relay Assignment
 
@@ -98,16 +100,20 @@
 3. allocation failure가 ticket order를 보존하고 concurrent enqueue가 duplicate match/player/room을 만들지 않는다.
 4. Lobby start와 Quick Match 양쪽 HTTP→private grant→UDP bind→same-room exchange가 자동 end-to-end로 통과한다.
 
-**Status:** Planned — implementation pending
+**Status:** Complete — 2026-08-20
 
 **Plan:** [M1 Phase 4–5 plan](../docs/superpowers/plans/2026-08-20-room-lobby-quick-match-m1.md)
 
+**Evidence:** [Phase 5 evidence](../docs/evidence/m1/phase-5.md)
+
 #### Milestone 1 Completion Gate
 
-- [ ] PROT-01부터 MATCH-03까지 M1 requirement 23개가 evidence에 매핑되어 통과한다.
-- [ ] 단일 Go process가 operator HTTP, player HTTP, Lobby/Quick Match, Relay store와 UDP Relay를 외부 상태 없이 실행한다.
-- [ ] 두 독립 client가 Lobby 및 Quick Match 경로에서 자기 grant만 받아 UDP payload를 교환한다.
-- [ ] Steamworks, FishNet, Open Match runtime, Redis, database, Kubernetes, Agones와 Unity build가 M1 실행 경로에 없다.
+- [x] PROT-01부터 MATCH-03까지 M1 requirement 23개가 evidence에 매핑되어 통과한다.
+- [x] 단일 Go process가 operator HTTP, player HTTP, Lobby/Quick Match, Relay store와 UDP Relay를 외부 상태 없이 실행한다.
+- [x] 두 독립 client가 Lobby 및 Quick Match 경로에서 자기 grant만 받아 UDP payload를 교환한다.
+- [x] Steamworks, FishNet, Open Match runtime, Redis, database, Kubernetes, Agones와 Unity build가 M1 실행 경로에 없다.
+
+**Evidence:** [Milestone 1 evidence](../docs/evidence/m1/milestone-1.md)
 
 ### Phase 6: Client SDK Integration
 
@@ -187,8 +193,8 @@
 | 1 | 1/1 | Complete | 2026-08-09 |
 | 2 | 1/1 | Complete | 2026-08-09 |
 | 3 | 1/1 | Complete | 2026-08-10 |
-| 4 | 0/1 | Planned | - |
-| 5 | 0/1 | Planned | - |
+| 4 | 1/1 | Complete | 2026-08-20 |
+| 5 | 1/1 | Complete | 2026-08-20 |
 | 6 | 0/unplanned | Not started | - |
 | 7 | 0/unplanned | Not started | - |
 | 8 | 0/unplanned | Not started | - |

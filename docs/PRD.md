@@ -4,7 +4,7 @@
 |---|---|
 | 버전 | 5.0 |
 | 갱신일 | 2026-08-20 |
-| 상태 | Approved scope / Phases 1–3 verified / Phases 4–9 pending |
+| 상태 | Milestone 1 verified / Phases 1–5 complete / Phases 6–9 pending |
 | 제품 | `go-lobby-relay` |
 | 주 독자 | 제품 책임자, Go/C# 엔지니어, 초기 운영 담당자 |
 
@@ -115,17 +115,21 @@ Evidence: [Phase 1](./evidence/m1/phase-1.md), [Phase 2](./evidence/m1/phase-2.m
 
 ### 7.2 Player Identity and Lobby — 5개
 
-- [ ] **AUTH-01:** operator-issued 15-minute Player Token is the only player identity authority; tamper, expiry and restart invalidate it.
-- [ ] **LOBBY-01:** create public/private Lobby and bounded public search or authorized exact get.
-- [ ] **LOBBY-02:** atomic join/leave, one active ownership, capacity, deterministic owner transfer and empty close.
-- [ ] **LOBBY-03:** revision-checked ready, membership reset and owner-only full/all-ready start.
-- [ ] **LOBBY-04:** exact deadline, hard limit, privacy, cleanup, redaction and concurrent mutation safety.
+- [x] **AUTH-01:** operator-issued 15-minute Player Token is the only player identity authority; tamper, expiry and restart invalidate it.
+- [x] **LOBBY-01:** create public/private Lobby and bounded public search or authorized exact get.
+- [x] **LOBBY-02:** atomic join/leave, one active ownership, capacity, deterministic owner transfer and empty close.
+- [x] **LOBBY-03:** revision-checked ready, membership reset and owner-only full/all-ready start.
+- [x] **LOBBY-04:** exact deadline, hard limit, privacy, cleanup, redaction and concurrent mutation safety.
+
+Evidence: [Phase 4](./evidence/m1/phase-4.md)
 
 ### 7.3 Quick Match and assignment — 3개
 
-- [ ] **MATCH-01:** compatible one-player FIFO ticket, status, cancellation and exact expiry.
-- [ ] **MATCH-02:** Lobby/Quick Match creates immutable Relay allocation and exposes caller-private assignment only.
-- [ ] **MATCH-03:** allocation rollback preserves tickets and concurrency creates no duplicate match/player/room.
+- [x] **MATCH-01:** compatible one-player FIFO ticket, status, cancellation and exact expiry.
+- [x] **MATCH-02:** Lobby/Quick Match creates immutable Relay allocation and exposes caller-private assignment only.
+- [x] **MATCH-03:** allocation rollback preserves tickets and concurrency creates no duplicate match/player/room.
+
+Evidence: [Phase 5](./evidence/m1/phase-5.md)
 
 The authoritative 37-requirement registry is [REQUIREMENTS.md](../.planning/REQUIREMENTS.md).
 
@@ -171,13 +175,15 @@ The player listener never serves operator routes. Player identity always comes f
 
 M1 is complete only when all are true:
 
-- [ ] 23 M1 requirements have implementation and named evidence.
-- [ ] one process owns operator HTTP, player HTTP, Lobby/Match state, Relay state and UDP Relay.
-- [ ] create→join→ready→start produces two private grants and successful UDP exchange.
-- [ ] enqueue→matched produces two private grants and successful UDP exchange.
-- [ ] expiry, tamper, identity confusion, privacy, capacity, allocation rollback and concurrency tests pass.
-- [ ] protocol generation, all Go tests, race, fuzz, vet and binary build pass on a clean candidate.
-- [ ] no Redis/database/distributed runtime/game SDK/Unity build is required.
+- [x] 23 M1 requirements have implementation and named evidence.
+- [x] one process owns operator HTTP, player HTTP, Lobby/Match state, Relay state and UDP Relay.
+- [x] create→join→ready→start produces two private grants and successful UDP exchange.
+- [x] enqueue→matched produces two private grants and successful UDP exchange.
+- [x] expiry, tamper, identity confusion, privacy, capacity, allocation rollback and concurrency tests pass.
+- [x] protocol generation, all Go tests, race, fuzz, vet and binary build pass on a clean candidate.
+- [x] no Redis/database/distributed runtime/game SDK/Unity build is required.
+
+Evidence: [Milestone 1](./evidence/m1/milestone-1.md)
 
 ## 11. M2 Scope
 

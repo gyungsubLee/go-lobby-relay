@@ -3,7 +3,7 @@
 | 항목 | 값 |
 |---|---|
 | 갱신일 | 2026-08-20 |
-| 상태 | Phase 1–3 implemented; Phase 4–9 pending |
+| 상태 | Milestone 1 verified; Phase 1–5 implemented; Phase 6–9 pending |
 | module | `github.com/gyungsubLee/go-lobby-relay` |
 | runtime | Go 1.26.5, single process, in-memory |
 | 관련 문서 | [PRD](./PRD.md), [Requirements](../.planning/REQUIREMENTS.md), [Roadmap](../.planning/ROADMAP.md) |
@@ -378,9 +378,9 @@ M1 completion evidence is recorded only from a clean candidate after all rows pa
 | Component | Requirements | Phase |
 |---|---|---:|
 | existing protocol/store/control/relay/server | PROT-01~02, ROOM-01~03, SESS-01~04, RELY-01~03, SAFE-01~03 | 1–3 complete |
-| `internal/playerauth`, operator token endpoint | AUTH-01 | 4 |
-| `internal/lobby` lifecycle, `internal/playerapi` | LOBBY-01~04 | 4 |
-| `internal/lobby` matcher and assignment, E2E | MATCH-01~03 | 5 |
+| `internal/playerauth`, operator token endpoint | AUTH-01 | 4 complete |
+| `internal/lobby` lifecycle, `internal/playerapi` | LOBBY-01~04 | 4 complete |
+| `internal/lobby` matcher and assignment, E2E | MATCH-01~03 | 5 complete |
 | actual C# game client integration | UNITY-01~03 | 6 |
 | operations | OPS-01~04 | 7 |
 | packaging/deployment | SHIP-01~03 | 8 |

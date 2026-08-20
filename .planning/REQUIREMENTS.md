@@ -6,7 +6,7 @@
 
 **Core Value:** 플레이어가 방을 만들거나 빠르게 매칭되고, 매칭된 참가자만 안전하게 같은 UDP Relay room에서 통신할 수 있다.
 
-현재 37개 요구사항 중 Phase 1–3의 15개가 Complete이고 22개가 Pending이다. M1은 Phase 1–5의 23개 요구사항, M2는 Phase 6–9의 14개 요구사항을 소유한다.
+현재 37개 요구사항 중 M1 Phase 1–5의 23개가 Complete이고 M2 Phase 6–9의 14개가 Pending이다.
 
 ## Milestone 1 — Room/Lobby & Quick Match MVP
 
@@ -36,17 +36,17 @@
 
 ### Player Identity and Lobby Lifecycle
 
-- [ ] **AUTH-01**: operator가 한 valid `player_id`에 묶인 15분 Player Token을 발급하고, player API는 caller-supplied identity를 신뢰하지 않으며 restart가 기존 token을 무효화한다.
-- [ ] **LOBBY-01**: authenticated player가 bounded public/private Lobby를 만들고 public search 또는 authorized exact state를 조회한다.
-- [ ] **LOBBY-02**: player는 최대 한 open Lobby 또는 live ticket만 가지며 join/leave는 capacity-safe·atomic하고 owner를 deterministic하게 이전하거나 empty Lobby를 닫는다.
-- [ ] **LOBBY-03**: revision-checked ready 상태는 membership 변경 때 reset되고 full/all-ready Lobby만 owner가 시작한다.
-- [ ] **LOBBY-04**: exact deadline, hard limit, private visibility, cleanup, redaction과 concurrent mutation이 partial state나 secret leakage를 만들지 않는다.
+- [x] **AUTH-01**: operator가 한 valid `player_id`에 묶인 15분 Player Token을 발급하고, player API는 caller-supplied identity를 신뢰하지 않으며 restart가 기존 token을 무효화한다.
+- [x] **LOBBY-01**: authenticated player가 bounded public/private Lobby를 만들고 public search 또는 authorized exact state를 조회한다.
+- [x] **LOBBY-02**: player는 최대 한 open Lobby 또는 live ticket만 가지며 join/leave는 capacity-safe·atomic하고 owner를 deterministic하게 이전하거나 empty Lobby를 닫는다.
+- [x] **LOBBY-03**: revision-checked ready 상태는 membership 변경 때 reset되고 full/all-ready Lobby만 owner가 시작한다.
+- [x] **LOBBY-04**: exact deadline, hard limit, private visibility, cleanup, redaction과 concurrent mutation이 partial state나 secret leakage를 만들지 않는다.
 
 ### Quick Match and Relay Assignment
 
-- [ ] **MATCH-01**: one-player FIFO ticket은 동일 `queue_key`와 target capacity끼리만 match되고 cancel·exact expiry를 지원한다.
-- [ ] **MATCH-02**: ready Lobby 또는 Quick Match는 기존 immutable Relay room을 만들고 caller에게 자기 assignment/grant만 반환한다.
-- [ ] **MATCH-03**: Relay allocation 실패는 ticket selection을 원래 순서로 보존하며 concurrent enqueue/start가 duplicate player, match 또는 room을 만들지 않는다.
+- [x] **MATCH-01**: one-player FIFO ticket은 동일 `queue_key`와 target capacity끼리만 match되고 cancel·exact expiry를 지원한다.
+- [x] **MATCH-02**: ready Lobby 또는 Quick Match는 기존 immutable Relay room을 만들고 caller에게 자기 assignment/grant만 반환한다.
+- [x] **MATCH-03**: Relay allocation 실패는 ticket selection을 원래 순서로 보존하며 concurrent enqueue/start가 duplicate player, match 또는 room을 만들지 않는다.
 
 ## Milestone 2 — Client Integration & Single-Host Operation
 
@@ -83,13 +83,13 @@
 | 1 | PROT-01, PROT-02 | 2 | Complete |
 | 2 | ROOM-01, ROOM-02, SESS-01 | 3 | Complete |
 | 3 | ROOM-03, SESS-02~04, RELY-01~03, SAFE-01~03 | 10 | Complete |
-| 4 | AUTH-01, LOBBY-01~04 | 5 | Pending |
-| 5 | MATCH-01~03 | 3 | Pending |
+| 4 | AUTH-01, LOBBY-01~04 | 5 | Complete |
+| 5 | MATCH-01~03 | 3 | Complete |
 | 6 | UNITY-01~03 | 3 | Pending |
 | 7 | OPS-01~04 | 4 | Pending |
 | 8 | SHIP-01~03 | 3 | Pending |
 | 9 | VERI-01~02, PERF-01~02 | 4 | Pending |
-| **Total** | **37 unique requirements** | **37** | **15 Complete / 22 Pending** |
+| **Total** | **37 unique requirements** | **37** | **23 Complete / 14 Pending** |
 
 ## Contract Interpretation
 

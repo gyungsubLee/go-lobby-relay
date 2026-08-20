@@ -19,15 +19,15 @@
 - [x] 인증·replay 방지·rebind·same-room UDP fan-out
 - [x] 입력·rate·fan-out hard limit과 secret-free cleanup
 
-### Active
+### Completed in M1
 
-- [ ] 운영자가 플레이어 ID에 묶인 짧은 수명의 Player Token을 발급한다.
-- [ ] 플레이어가 public/private Lobby를 생성·검색·조회·입장·퇴장한다.
-- [ ] Lobby owner와 ready 상태가 동시성·revision 충돌에도 일관되게 유지된다.
-- [ ] owner가 full/all-ready Lobby를 기존 Relay allocation으로 시작한다.
-- [ ] 플레이어가 동일 queue/capacity의 bounded FIFO Quick Match에 참가·조회·취소한다.
-- [ ] 매칭된 각 플레이어는 자기 Relay grant만 받는다.
-- [ ] 전체 HTTP→Relay 흐름이 Unity 없이 자동 검증된다.
+- [x] 운영자가 플레이어 ID에 묶인 짧은 수명의 Player Token을 발급한다.
+- [x] 플레이어가 public/private Lobby를 생성·검색·조회·입장·퇴장한다.
+- [x] Lobby owner와 ready 상태가 동시성·revision 충돌에도 일관되게 유지된다.
+- [x] owner가 full/all-ready Lobby를 기존 Relay allocation으로 시작한다.
+- [x] 플레이어가 동일 queue/capacity의 bounded FIFO Quick Match에 참가·조회·취소한다.
+- [x] 매칭된 각 플레이어는 자기 Relay grant만 받는다.
+- [x] 전체 HTTP→Relay 흐름이 Unity 없이 자동 검증된다.
 
 ### Out of Scope
 
@@ -66,7 +66,8 @@
 - Phase 1–3 evidence: [phase-1](../docs/evidence/m1/phase-1.md), [phase-2](../docs/evidence/m1/phase-2.md), [phase-3](../docs/evidence/m1/phase-3.md)
 - Approved redesign: [Room/Lobby & Quick Match design](../docs/superpowers/specs/2026-08-20-room-lobby-quick-match-design.md)
 - Execution plan: [M1 implementation plan](../docs/superpowers/plans/2026-08-20-room-lobby-quick-match-m1.md)
+- Completion evidence: [Milestone 1](../docs/evidence/m1/milestone-1.md)
 - ADR 0001–0003 remain authoritative for the implemented Relay wire, lifecycle, and UDP admission contracts.
 
 ---
-*Last updated: 2026-08-20 after M1 product rebaseline*
+*Last updated: 2026-08-20 after verified M1 completion*

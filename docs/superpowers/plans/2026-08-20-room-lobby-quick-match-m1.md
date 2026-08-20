@@ -552,7 +552,7 @@ git commit -m "feat(server): run lobby and relay in one process"
 - Consumes: clean source candidate and fresh full-gate outputs.
 - Produces: all 23 M1 requirements complete, Phases 1–5 complete, M1 complete, Phase 6 next, and no Unity version/hardware claim.
 
-- [ ] **Step 1: Run the clean-candidate gate before status edits**
+- [x] **Step 1: Run the clean-candidate gate before status edits**
 
 ```bash
 git status --porcelain=v1 --untracked-files=all
@@ -570,15 +570,15 @@ git diff --check
 
 Expected: clean-before and every gate exit `0`.
 
-- [ ] **Step 2: Write requirement-linked evidence**
+- [x] **Step 2: Write requirement-linked evidence**
 
 Record source commit, Go/tool versions, exact commands/results, named tests, failure semantics, token/lobby/ticket limits, concurrency results, participant-private assignments, end-to-end UDP exchange, data-handling scans, and unsupported integrations. Do not include raw operator tokens, Player Tokens, Relay grants, secrets, or payloads.
 
-- [ ] **Step 3: Mark only proven status complete**
+- [x] **Step 3: Mark only proven status complete**
 
 Mark `AUTH-01`, `LOBBY-01..04`, and `MATCH-01..03`, Phases 4–5, and Milestone 1 complete. Keep `UNITY-01..03`, `OPS-01..04`, `SHIP-01..03`, `VERI-01..02`, and `PERF-01..02` pending under M2. Set current position to Phase 6 without choosing an exact Unity matrix.
 
-- [ ] **Step 4: Verify document consistency and secret hygiene**
+- [x] **Step 4: Verify document consistency and secret hygiene**
 
 ```bash
 rg -n '6000\.3\.20f1|blocked on.*D-05|Single-Binary Relay MVP|github.com/gyungsubLee/go-game-relay' go.mod .planning/PROJECT.md .planning/REQUIREMENTS.md .planning/ROADMAP.md .planning/STATE.md docs/PRD.md docs/TRD.md cmd internal
@@ -588,7 +588,7 @@ git diff --check
 
 Expected: no stale active contract; each new ID has one owner and evidence mapping; no diff errors.
 
-- [ ] **Step 5: Commit M1 closure**
+- [x] **Step 5: Commit M1 closure**
 
 ```bash
 git add docs/evidence/m1 .planning docs/PRD.md docs/TRD.md docs/superpowers/plans/2026-08-20-room-lobby-quick-match-m1.md

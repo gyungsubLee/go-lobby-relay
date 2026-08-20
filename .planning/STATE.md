@@ -3,10 +3,10 @@ gsd_state_version: '1.0'
 status: in_progress
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 5
   total_plans: 5
-  completed_plans: 3
-  percent: 33
+  completed_plans: 5
+  percent: 56
 ---
 
 # Project State
@@ -17,27 +17,29 @@ See: [PROJECT.md](./PROJECT.md)
 
 **Core value:** 플레이어가 방을 만들거나 빠르게 매칭되고, 매칭된 참가자만 안전하게 같은 UDP Relay room에서 통신할 수 있다.
 
-**Current focus:** Phase 4 — Player Identity and Lobby Lifecycle
+**Current focus:** Phase 6 — Client SDK Integration planning
 
 ## Current Position
 
-Phase: 4 of 9
+Phase: 6 of 9
 
-Plan: Phase 4–5 shared implementation plan in progress
+Plan: not yet written; actual game client target must be chosen first
 
-Status: In progress — M1 product rebaseline accepted; implementation pending
+Status: Milestone 1 complete; Milestone 2 not started
 
-Last activity: 2026-08-20 — Room/Lobby & Quick Match design and execution plan committed
+Last activity: 2026-08-20 — Room/Lobby & Quick Match M1 verified and closed
 
-Progress: [███░░░░░░░] 33%
+Progress: [██████░░░░] 56%
 
 ## Completed Foundation
 
 - Phase 1: bounded Protobuf contract, Go/C# generation and threat boundary
 - Phase 2: operator-authenticated immutable Relay room/grant lifecycle
 - Phase 3: authenticated UDP bind/rebind/replay/admission/fan-out and minimum server binary
+- Phase 4: operator-issued Player Token and bounded public/private Lobby lifecycle
+- Phase 5: one-player FIFO Quick Match, private Relay assignments, and real HTTP→UDP flows
 
-Evidence: [Phase 1](../docs/evidence/m1/phase-1.md), [Phase 2](../docs/evidence/m1/phase-2.md), [Phase 3](../docs/evidence/m1/phase-3.md)
+Evidence: [Phase 1](../docs/evidence/m1/phase-1.md), [Phase 2](../docs/evidence/m1/phase-2.md), [Phase 3](../docs/evidence/m1/phase-3.md), [Phase 4](../docs/evidence/m1/phase-4.md), [Phase 5](../docs/evidence/m1/phase-5.md), [M1](../docs/evidence/m1/milestone-1.md)
 
 ## Current Decisions
 
@@ -50,10 +52,9 @@ Evidence: [Phase 1](../docs/evidence/m1/phase-1.md), [Phase 2](../docs/evidence/
 
 ## Pending Work
 
-1. Implement and verify AUTH-01 and LOBBY-01~04.
-2. Implement and verify MATCH-01~03.
-3. Compose separate player listener and prove Lobby/Quick Match HTTP→UDP flows.
-4. Record Phase 4/5 evidence and close the 23-requirement M1 gate.
+1. Choose the actual game client integration target before fixing any Unity editor/platform/device matrix.
+2. Brainstorm and write the Phase 6 plan for UNITY-01~03.
+3. Keep Steamworks and FishNet optional until the selected client requires their adapter boundaries.
 
 ## Blockers/Concerns
 
@@ -74,6 +75,6 @@ Evidence: [Phase 1](../docs/evidence/m1/phase-1.md), [Phase 2](../docs/evidence/
 
 Last session: 2026-08-20
 
-Stopped at: Task 1 product document rebaseline
+Stopped at: Milestone 1 complete; Phase 6 is next
 
-Resume file: [M1 implementation plan](../docs/superpowers/plans/2026-08-20-room-lobby-quick-match-m1.md)
+Resume file: [Milestone 1 evidence](../docs/evidence/m1/milestone-1.md)
