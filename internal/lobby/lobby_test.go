@@ -1,6 +1,7 @@
 package lobby
 
 import (
+	"encoding/binary"
 	"errors"
 	"sync"
 	"testing"
@@ -32,16 +33,23 @@ func (clock *lobbyTestClock) advance(delta time.Duration) {
 
 type incrementingReader struct {
 	mu   sync.Mutex
-	next byte
+	next uint64
 }
 
 func (reader *incrementingReader) Read(buffer []byte) (int, error) {
 	reader.mu.Lock()
 	defer reader.mu.Unlock()
 	for index := range buffer {
-		buffer[index] = reader.next
-		reader.next++
+		buffer[index] = 0
 	}
+	if len(buffer) >= 8 {
+		binary.BigEndian.PutUint64(buffer[len(buffer)-8:], reader.next)
+	} else {
+		for index := range buffer {
+			buffer[index] = byte(reader.next >> (8 * (len(buffer) - index - 1)))
+		}
+	}
+	reader.next++
 	return len(buffer), nil
 }
 
@@ -295,12 +303,12 @@ func newLobbyFixture(t *testing.T) (*Manager, *store.Store, *lobbyTestClock) {
 	relayStore, err := store.New(store.Config{
 		Limits: store.DefaultLimits(),
 		Now:    clock.read,
-		Random: &incrementingReader{next: 0x80},
+		Random: &incrementingReader{next: 0x8000},
 	})
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
-	manager, err := New(Config{Relay: relayStore, Now: clock.read, Random: &incrementingReader{next: 0x10}})
+	manager, err := New(Config{Relay: relayStore, Now: clock.read, Random: &incrementingReader{next: 0x1000}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

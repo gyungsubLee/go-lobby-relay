@@ -327,7 +327,8 @@ const (
 
 type EnqueueRequest struct { QueueKey string; Capacity uint32 }
 type TicketSnapshot struct {
-    TicketID, PlayerID, QueueKey, State string
+    TicketID, PlayerID, QueueKey string
+    State TicketState
     Capacity uint32
     Revision uint64
     ExpiresAt time.Time
@@ -339,7 +340,7 @@ func (manager *Manager) GetTicket(playerID string) (TicketSnapshot, error)
 func (manager *Manager) CancelTicket(playerID string, revision uint64) (TicketSnapshot, error)
 ```
 
-- [ ] **Step 1: Write Quick Match RED tests**
+- [x] **Step 1: Write Quick Match RED tests**
 
 Cover FIFO at equality and one-over, isolation by `queue_key` and capacity, lobby/ticket mutual exclusion, duplicate enqueue, cancel revision, exact expiry, matched privacy, ticket-count hard maximum, Relay capacity failure rollback preserving original FIFO order, fatal randomness without partial state, 100 concurrent enqueues forming exact non-overlapping groups, and no duplicate Relay allocation.
 
@@ -351,11 +352,11 @@ Run:
 
 Expected: compile RED on missing methods/types.
 
-- [ ] **Step 2: Implement minimum FIFO matcher**
+- [x] **Step 2: Implement minimum FIFO matcher**
 
 Keep queued ticket IDs in insertion order per exact `(queue_key, capacity)` key. On enqueue, select the first `capacity` live tickets, stage one Relay allocation, and only then mark them matched and attach one copied assignment per player. If allocation fails, leave all ticket state and queue order unchanged.
 
-- [ ] **Step 3: Verify GREEN and race**
+- [x] **Step 3: Verify GREEN and race**
 
 ```bash
 .tools/go/bin/go test ./internal/lobby -count=1
@@ -364,7 +365,7 @@ Keep queued ticket IDs in insertion order per exact `(queue_key, capacity)` key.
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/lobby

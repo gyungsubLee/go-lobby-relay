@@ -106,10 +106,12 @@ type Manager struct {
 	now    func() store.ClockReading
 	random io.Reader
 
-	lobbiesByID   map[string]*lobbyRecord
-	lobbyByPlayer map[string]string
-	matchIDs      map[string]struct{}
-	nextSequence  uint64
+	lobbiesByID     map[string]*lobbyRecord
+	lobbyByPlayer   map[string]string
+	matchIDs        map[string]struct{}
+	ticketsByPlayer map[string]*ticketRecord
+	queues          map[queueKey][]string
+	nextSequence    uint64
 }
 
 type lobbyRecord struct {
@@ -147,13 +149,15 @@ func New(config Config) (*Manager, error) {
 		random = rand.Reader
 	}
 	return &Manager{
-		relay:         config.Relay,
-		now:           now,
-		random:        random,
-		lobbiesByID:   make(map[string]*lobbyRecord),
-		lobbyByPlayer: make(map[string]string),
-		matchIDs:      make(map[string]struct{}),
-		nextSequence:  1,
+		relay:           config.Relay,
+		now:             now,
+		random:          random,
+		lobbiesByID:     make(map[string]*lobbyRecord),
+		lobbyByPlayer:   make(map[string]string),
+		matchIDs:        make(map[string]struct{}),
+		ticketsByPlayer: make(map[string]*ticketRecord),
+		queues:          make(map[queueKey][]string),
+		nextSequence:    1,
 	}, nil
 }
 
@@ -166,6 +170,9 @@ func (manager *Manager) Create(playerID string, request CreateRequest) (LobbySna
 	reading := manager.now()
 	manager.expireLocked(reading)
 	if _, exists := manager.lobbyByPlayer[playerID]; exists {
+		return LobbySnapshot{}, ErrConflict
+	}
+	if _, exists := manager.ticketsByPlayer[playerID]; exists {
 		return LobbySnapshot{}, ErrConflict
 	}
 	if len(manager.lobbiesByID) >= HardMaxOpenLobbies || manager.nextSequence == math.MaxUint64 {
@@ -268,6 +275,9 @@ func (manager *Manager) Join(playerID, lobbyID string, revision uint64) (LobbySn
 		return LobbySnapshot{}, ErrConflict
 	}
 	if _, exists := manager.lobbyByPlayer[playerID]; exists {
+		return LobbySnapshot{}, ErrConflict
+	}
+	if _, exists := manager.ticketsByPlayer[playerID]; exists {
 		return LobbySnapshot{}, ErrConflict
 	}
 	if len(record.members) >= int(record.capacity) {
@@ -528,6 +538,7 @@ func (manager *Manager) expireLocked(reading store.ClockReading) {
 		}
 		delete(manager.lobbiesByID, lobbyID)
 	}
+	manager.expireTicketsLocked(reading)
 }
 
 func deadlineAfter(now, ttl time.Duration) (time.Duration, bool) {
