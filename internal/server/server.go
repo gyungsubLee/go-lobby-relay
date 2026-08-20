@@ -7,8 +7,12 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gyungsubLee/go-lobby-relay/internal/control"
+	"github.com/gyungsubLee/go-lobby-relay/internal/lobby"
+	"github.com/gyungsubLee/go-lobby-relay/internal/playerapi"
+	"github.com/gyungsubLee/go-lobby-relay/internal/playerauth"
 	"github.com/gyungsubLee/go-lobby-relay/internal/relay"
 	"github.com/gyungsubLee/go-lobby-relay/internal/store"
 )
@@ -23,6 +27,7 @@ var (
 
 type Config struct {
 	ManagementListen string
+	PlayerListen     string
 	RelayNetwork     string
 	RelayListen      string
 	AdvertisedHost   string
@@ -31,9 +36,10 @@ type Config struct {
 }
 
 type dependencies struct {
-	listenTCP func(string, string) (net.Listener, error)
-	listenUDP func(string, *net.UDPAddr) (*net.UDPConn, error)
-	random    io.Reader
+	listenTCP        func(string, string) (net.Listener, error)
+	listenUDP        func(string, *net.UDPAddr) (*net.UDPConn, error)
+	random           io.Reader
+	playerAuthRandom io.Reader
 }
 
 func defaultDependencies() dependencies {
@@ -43,9 +49,13 @@ func defaultDependencies() dependencies {
 type Server struct {
 	managementListener net.Listener
 	managementServer   *http.Server
+	playerListener     net.Listener
+	playerServer       *http.Server
 	relay              *relay.Relay
 	rooms              *store.Store
+	lobbies            *lobby.Manager
 	managementAddr     net.Addr
+	playerAddr         net.Addr
 	relayAddr          net.Addr
 
 	mu              sync.Mutex
@@ -73,12 +83,26 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 	if err != nil {
 		return nil, errInvalidConfig
 	}
+	playerTokens, err := playerauth.New(playerauth.Config{OperatorSecret: config.OperatorToken, Random: deps.playerAuthRandom, TokenTTL: playerauth.HardTokenTTL})
+	if err != nil {
+		return nil, errInvalidConfig
+	}
+	lobbies, err := lobby.New(lobby.Config{Relay: rooms, Random: deps.random})
+	if err != nil {
+		return nil, errInvalidConfig
+	}
 	managementListener, err := deps.listenTCP("tcp", config.ManagementListen)
 	if err != nil {
 		return nil, errBind
 	}
+	playerListener, err := deps.listenTCP("tcp", config.PlayerListen)
+	if err != nil {
+		_ = managementListener.Close()
+		return nil, errBind
+	}
 	relaySocket, err := deps.listenUDP(config.RelayNetwork, relayAddress)
 	if err != nil {
+		_ = playerListener.Close()
 		_ = managementListener.Close()
 		return nil, errBind
 	}
@@ -86,6 +110,7 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 	defer func() {
 		if cleanup {
 			_ = managementListener.Close()
+			_ = playerListener.Close()
 			_ = relaySocket.Close()
 		}
 	}()
@@ -96,14 +121,18 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 	}
 	server := &Server{
 		managementListener: managementListener,
+		playerListener:     playerListener,
 		rooms:              rooms,
+		lobbies:            lobbies,
 		managementAddr:     managementListener.Addr(),
+		playerAddr:         playerListener.Addr(),
 		relayAddr:          relaySocket.LocalAddr(),
 		closeSignal:        make(chan struct{}),
 		fatalSignal:        make(chan struct{}),
 	}
 	handler, err := control.NewHandler(control.Config{
 		OperatorToken:  config.OperatorToken,
+		PlayerTokens:   playerTokens,
 		AdvertisedHost: config.AdvertisedHost,
 		AdvertisedPort: advertisedPort,
 		RequestRate:    control.HardManagementRequestRate,
@@ -114,23 +143,35 @@ func newWithDependencies(config Config, deps dependencies) (*Server, error) {
 	if err != nil {
 		return nil, errInvalidConfig
 	}
+	playerHandler, err := playerapi.NewHandler(playerapi.Config{
+		Auth: playerTokens, Lobbies: lobbies, AdvertisedHost: config.AdvertisedHost, AdvertisedPort: advertisedPort,
+		RequestRate: playerapi.HardPlayerRequestRate, RequestBurst: playerapi.HardPlayerRequestBurst,
+		MaxConcurrent: playerapi.HardPlayerConcurrent, Fatal: server.notifyFatal,
+	})
+	if err != nil {
+		return nil, errInvalidConfig
+	}
 	udpRelay, err := relay.New(relaySocket, rooms, relay.Config{})
 	if err != nil {
 		return nil, errInvalidConfig
 	}
 
 	server.managementServer = control.NewServer(managementListener.Addr().String(), handler)
+	server.playerServer = playerapi.NewServer(playerListener.Addr().String(), playerHandler)
 	server.relay = udpRelay
 	cleanup = false
 	return server, nil
 }
 
 func validateConfig(config Config) (*net.UDPAddr, error) {
-	if config.ManagementListen == "" || config.RelayListen == "" || config.AdvertisedHost == "" ||
+	if config.ManagementListen == "" || config.PlayerListen == "" || config.RelayListen == "" || config.AdvertisedHost == "" ||
 		config.OperatorToken == ([32]byte{}) || (config.RelayNetwork != "udp4" && config.RelayNetwork != "udp6") {
 		return nil, errInvalidConfig
 	}
 	if _, err := net.ResolveTCPAddr("tcp", config.ManagementListen); err != nil {
+		return nil, errInvalidConfig
+	}
+	if _, err := net.ResolveTCPAddr("tcp", config.PlayerListen); err != nil {
 		return nil, errInvalidConfig
 	}
 	relayAddress, err := net.ResolveUDPAddr(config.RelayNetwork, config.RelayListen)
@@ -141,6 +182,8 @@ func validateConfig(config Config) (*net.UDPAddr, error) {
 }
 
 func (server *Server) ManagementAddr() net.Addr { return server.managementAddr }
+
+func (server *Server) PlayerAddr() net.Addr { return server.playerAddr }
 
 func (server *Server) RelayAddr() net.Addr { return server.relayAddr }
 
@@ -167,17 +210,21 @@ func (server *Server) Run(ctx context.Context) error {
 	server.mu.Unlock()
 
 	runContext, cancel := context.WithCancel(ctx)
-	results := make(chan loopResult, 3)
+	results := make(chan loopResult, 4)
 	go func() {
 		err := server.managementServer.Serve(server.managementListener)
 		results <- server.classifyLoopResult(runContext, "management", err)
+	}()
+	go func() {
+		err := server.playerServer.Serve(server.playerListener)
+		results <- server.classifyLoopResult(runContext, "player", err)
 	}()
 	go func() {
 		err := server.relay.Run()
 		results <- server.classifyLoopResult(runContext, "relay", err)
 	}()
 	go func() {
-		server.rooms.RunSweeper(runContext)
+		server.runSweeper(runContext)
 		results <- server.classifyLoopResult(runContext, "sweeper", nil)
 	}()
 
@@ -190,6 +237,20 @@ func (server *Server) Run(ctx context.Context) error {
 	server.finished = true
 	server.mu.Unlock()
 	return runErr
+}
+
+func (server *Server) runSweeper(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			server.rooms.Expire()
+			server.lobbies.Expire()
+		}
+	}
 }
 
 func (server *Server) notifyFatal() {
@@ -218,7 +279,7 @@ func coordinateLoopResults(
 		unexpected = result.unexpected
 	}
 	stop()
-	for received < 3 {
+	for received < 4 {
 		if (<-results).unexpected {
 			unexpected = true
 		}
@@ -255,10 +316,14 @@ func (server *Server) Close() error {
 func (server *Server) shutdown() error {
 	server.shutdownOnce.Do(func() {
 		managementErr := server.managementServer.Close()
+		playerErr := server.playerServer.Close()
 		listenerErr := server.managementListener.Close()
+		playerListenerErr := server.playerListener.Close()
 		relayErr := server.relay.Close()
 		if managementErr != nil && !errors.Is(managementErr, http.ErrServerClosed) && !errors.Is(managementErr, net.ErrClosed) ||
-			listenerErr != nil && !errors.Is(listenerErr, net.ErrClosed) || relayErr != nil {
+			playerErr != nil && !errors.Is(playerErr, http.ErrServerClosed) && !errors.Is(playerErr, net.ErrClosed) ||
+			listenerErr != nil && !errors.Is(listenerErr, net.ErrClosed) ||
+			playerListenerErr != nil && !errors.Is(playerListenerErr, net.ErrClosed) || relayErr != nil {
 			server.shutdownErr = errClose
 		}
 	})

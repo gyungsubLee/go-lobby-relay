@@ -29,14 +29,14 @@ func TestParseConfigRequiresExactFlagsAndWiresToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseConfig(valid): %v", err)
 	}
-	if config.ManagementListen != "127.0.0.1:0" || config.RelayNetwork != "udp4" ||
+	if config.ManagementListen != "127.0.0.1:0" || config.PlayerListen != "127.0.0.1:0" || config.RelayNetwork != "udp4" ||
 		config.RelayListen != "127.0.0.1:0" || config.AdvertisedHost != "relay.test" ||
 		config.AdvertisedPort != 30000 || config.OperatorToken != cliTestToken {
 		t.Fatalf("parseConfig(valid) = %#v", config)
 	}
 
 	flags := []string{
-		"--management-listen", "--relay-network", "--relay-listen",
+		"--management-listen", "--player-listen", "--relay-network", "--relay-listen",
 		"--advertised-host", "--advertised-port", "--operator-token-file",
 	}
 	for _, flagName := range flags {
@@ -67,6 +67,7 @@ func TestParseConfigRequiresExactFlagsAndWiresToken(t *testing.T) {
 		{"invalid relay network", replaceFlag(args, "--relay-network", "udp")},
 		{"relative token path", replaceFlag(args, "--operator-token-file", "token")},
 		{"empty management listen", replaceFlag(args, "--management-listen", "")},
+		{"empty player listen", replaceFlag(args, "--player-listen", "")},
 		{"empty relay listen", replaceFlag(args, "--relay-listen", "")},
 		{"empty advertised host", replaceFlag(args, "--advertised-host", "")},
 	}
@@ -225,7 +226,8 @@ func TestActualMainSignalAndMalformedArgumentsAreSecretFree(t *testing.T) {
 	select {
 	case err := <-wait:
 		t.Fatalf("valid main exited during startup: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
-	case <-time.After(time.Second):
+	// ponytail: :0 listeners expose no readiness address; bounded liveness avoids a production-only test seam.
+	case <-time.After(3 * time.Second):
 	}
 	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
 		_ = command.Process.Kill()
@@ -273,6 +275,7 @@ func writeTokenFile(t *testing.T, suffix string) string {
 func validArgs(tokenPath string) []string {
 	return []string{
 		"--management-listen", "127.0.0.1:0",
+		"--player-listen", "127.0.0.1:0",
 		"--relay-network", "udp4",
 		"--relay-listen", "127.0.0.1:0",
 		"--advertised-host", "relay.test",

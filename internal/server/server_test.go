@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -35,6 +36,8 @@ func TestNewValidatesBeforeBinding(t *testing.T) {
 	}{
 		{"empty management listen", func(config *Config) { config.ManagementListen = "" }},
 		{"invalid management listen", func(config *Config) { config.ManagementListen = "127.0.0.1" }},
+		{"empty player listen", func(config *Config) { config.PlayerListen = "" }},
+		{"invalid player listen", func(config *Config) { config.PlayerListen = "127.0.0.1" }},
 		{"invalid relay network", func(config *Config) { config.RelayNetwork = "udp" }},
 		{"empty relay listen", func(config *Config) { config.RelayListen = "" }},
 		{"invalid relay listen", func(config *Config) { config.RelayListen = "127.0.0.1" }},
@@ -70,14 +73,36 @@ func TestNewValidatesBeforeBinding(t *testing.T) {
 	}
 }
 
+func TestNewBindsSeparatePlayerListenerWithoutServing(t *testing.T) {
+	server, err := New(testServerConfig())
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	defer server.Close()
+	if server.PlayerAddr() == nil || server.PlayerAddr().String() == server.ManagementAddr().String() {
+		t.Fatalf("player/management addresses = %v/%v", server.PlayerAddr(), server.ManagementAddr())
+	}
+	connection, err := net.DialTimeout("tcp", server.PlayerAddr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("player listener not bound: %v", err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	_, _ = io.WriteString(connection, "GET /v1/lobbies?queue_key=duo HTTP/1.1\r\nHost: test\r\n\r\n")
+	var one [1]byte
+	if _, err := connection.Read(one[:]); err == nil {
+		t.Fatal("player API served before Run")
+	}
+	_ = connection.Close()
+}
+
 func TestNewRollsBackTCPWhenUDPBindFails(t *testing.T) {
 	config := testServerConfig()
 	deps := defaultDependencies()
-	var managementAddr string
+	var tcpAddresses []string
 	deps.listenTCP = func(network, address string) (net.Listener, error) {
 		listener, err := net.Listen(network, address)
 		if err == nil {
-			managementAddr = listener.Addr().String()
+			tcpAddresses = append(tcpAddresses, listener.Addr().String())
 		}
 		return listener, err
 	}
@@ -88,14 +113,16 @@ func TestNewRollsBackTCPWhenUDPBindFails(t *testing.T) {
 	if server, err := newWithDependencies(config, deps); err == nil || server != nil {
 		t.Fatalf("newWithDependencies() = (%#v, %v), want nil/error", server, err)
 	}
-	if managementAddr == "" {
-		t.Fatal("TCP listener was not opened before the UDP attempt")
+	if len(tcpAddresses) != 2 {
+		t.Fatalf("TCP listeners opened before UDP = %d, want 2", len(tcpAddresses))
 	}
-	rebound, err := net.Listen("tcp", managementAddr)
-	if err != nil {
-		t.Fatalf("TCP listener was not rolled back: %v", err)
+	for _, address := range tcpAddresses {
+		rebound, err := net.Listen("tcp", address)
+		if err != nil {
+			t.Fatalf("TCP listener %s was not rolled back: %v", address, err)
+		}
+		_ = rebound.Close()
 	}
-	_ = rebound.Close()
 }
 
 func TestRunSharesHTTPStoreWithRelayAndCancelsCleanly(t *testing.T) {
@@ -153,6 +180,183 @@ func TestRunSharesHTTPStoreWithRelayAndCancelsCleanly(t *testing.T) {
 		t.Fatalf("Close() after Run: %v", err)
 	}
 	assertAddressesRebind(t, managementAddr, relayAddr, config.RelayNetwork)
+}
+
+func TestPlayerHTTPToUDPFlows(t *testing.T) {
+	for _, flow := range []struct {
+		name   string
+		assign func(*testing.T, string, string, string) (playerAssignment, playerAssignment)
+	}{
+		{"lobby", lobbyAssignments},
+		{"quick match", quickMatchAssignments},
+	} {
+		t.Run(flow.name, func(t *testing.T) {
+			config := testServerConfig()
+			server, err := New(config)
+			if err != nil {
+				t.Fatalf("New(): %v", err)
+			}
+			management, player, relayAddress := server.ManagementAddr().String(), server.PlayerAddr().String(), server.RelayAddr().(*net.UDPAddr).AddrPort()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- server.Run(ctx) }()
+			waitForManagement(t, management, serverTestToken)
+			firstToken := issuePlayerToken(t, management, "player-a")
+			secondToken := issuePlayerToken(t, management, "player-b")
+			firstAssignment, secondAssignment := flow.assign(t, player, firstToken, secondToken)
+			if firstAssignment.RoomID != secondAssignment.RoomID || firstAssignment.PlayerID != "player-a" || secondAssignment.PlayerID != "player-b" || firstAssignment.GrantSecret == secondAssignment.GrantSecret {
+				t.Fatalf("assignments = %+v / %+v", firstAssignment, secondAssignment)
+			}
+			first := newAllocatedClient(t)
+			second := newAllocatedClient(t)
+			first.bind(t, relayAddress, firstAssignment.RoomID, firstAssignment.grant(), 0x81)
+			second.bind(t, relayAddress, secondAssignment.RoomID, secondAssignment.grant(), 0x82)
+			payload := []byte("m1-http-to-udp")
+			first.sendData(t, relayAddress, 1, payload)
+			second.expectData(t, "player-a", 1, payload)
+			_ = first.conn.Close()
+			_ = second.conn.Close()
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Run(): %v", err)
+			}
+			if err := server.Close(); err != nil {
+				t.Fatalf("Close(): %v", err)
+			}
+			assertThreeAddressesRebind(t, server.ManagementAddr(), server.PlayerAddr(), server.RelayAddr(), config.RelayNetwork)
+		})
+	}
+}
+
+type playerAssignment struct {
+	MatchID     string `json:"match_id"`
+	RoomID      string `json:"room_id"`
+	PlayerID    string `json:"player_id"`
+	SessionID   string `json:"session_id"`
+	GrantID     string `json:"grant_id"`
+	GrantSecret string `json:"grant_secret"`
+}
+
+func (assignment playerAssignment) grant() testGrantResponse {
+	secret := assignment.GrantSecret
+	return testGrantResponse{ParticipantID: assignment.PlayerID, SessionID: assignment.SessionID, GrantID: assignment.GrantID, GrantSecret: &secret}
+}
+
+func issuePlayerToken(t *testing.T, management, playerID string) string {
+	t.Helper()
+	response := httpJSON(t, management, serverTestTokenBearer(), "POST", "/v1/player-tokens", `{"player_id":"`+playerID+`"}`)
+	if response.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("issue token = %d %q", response.StatusCode, body)
+	}
+	defer response.Body.Close()
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result.Token
+}
+
+func lobbyAssignments(t *testing.T, player, firstToken, secondToken string) (playerAssignment, playerAssignment) {
+	t.Helper()
+	created := playerJSON(t, player, firstToken, "POST", "/v1/lobbies", `{"visibility":"private","queue_key":"duo","capacity":2}`)
+	var state struct {
+		LobbyID    string            `json:"lobby_id"`
+		Revision   uint64            `json:"revision"`
+		Assignment *playerAssignment `json:"assignment"`
+	}
+	decodeHTTP(t, created, http.StatusCreated, &state)
+	joined := playerJSON(t, player, secondToken, "POST", "/v1/lobbies/"+state.LobbyID+"/join", fmt.Sprintf(`{"revision":%d}`, state.Revision))
+	decodeHTTP(t, joined, http.StatusOK, &state)
+	for _, token := range []string{firstToken, secondToken} {
+		ready := playerJSON(t, player, token, "PUT", "/v1/lobbies/"+state.LobbyID+"/members/me/ready", fmt.Sprintf(`{"revision":%d,"ready":true}`, state.Revision))
+		decodeHTTP(t, ready, http.StatusOK, &state)
+	}
+	started := playerJSON(t, player, firstToken, "POST", "/v1/lobbies/"+state.LobbyID+"/start", fmt.Sprintf(`{"revision":%d}`, state.Revision))
+	var first playerAssignment
+	decodeHTTP(t, started, http.StatusOK, &first)
+	member := playerJSON(t, player, secondToken, "GET", "/v1/lobbies/"+state.LobbyID, "")
+	decodeHTTP(t, member, http.StatusOK, &state)
+	if state.Assignment == nil {
+		t.Fatal("member assignment missing")
+	}
+	return first, *state.Assignment
+}
+
+func quickMatchAssignments(t *testing.T, player, firstToken, secondToken string) (playerAssignment, playerAssignment) {
+	t.Helper()
+	first := playerJSON(t, player, firstToken, "POST", "/v1/matchmaking/tickets", `{"queue_key":"duo","capacity":2}`)
+	decodeHTTP(t, first, http.StatusCreated, &struct{}{})
+	second := playerJSON(t, player, secondToken, "POST", "/v1/matchmaking/tickets", `{"queue_key":"duo","capacity":2}`)
+	decodeHTTP(t, second, http.StatusCreated, &struct{}{})
+	var tickets [2]struct {
+		Assignment *playerAssignment `json:"assignment"`
+	}
+	for index, token := range []string{firstToken, secondToken} {
+		response := playerJSON(t, player, token, "GET", "/v1/matchmaking/tickets/me", "")
+		decodeHTTP(t, response, http.StatusOK, &tickets[index])
+		if tickets[index].Assignment == nil {
+			t.Fatalf("ticket %d assignment missing", index)
+		}
+	}
+	return *tickets[0].Assignment, *tickets[1].Assignment
+}
+
+func playerJSON(t *testing.T, address, token, method, path, body string) *http.Response {
+	t.Helper()
+	return httpJSON(t, address, "Bearer "+token, method, path, body)
+}
+
+func httpJSON(t *testing.T, address, authorization, method, path, body string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(method, "http://"+address+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", authorization)
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := (&http.Client{Timeout: time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return response
+}
+
+func decodeHTTP(t *testing.T, response *http.Response, status int, target any) {
+	t.Helper()
+	defer response.Body.Close()
+	if response.StatusCode != status {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status=%d body=%q want=%d", response.StatusCode, body, status)
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func serverTestTokenBearer() string {
+	return "Bearer " + base64.RawURLEncoding.EncodeToString(serverTestToken[:])
+}
+
+func assertThreeAddressesRebind(t *testing.T, management, player, relayAddress net.Addr, relayNetwork string) {
+	t.Helper()
+	for _, address := range []net.Addr{management, player} {
+		listener, err := net.Listen("tcp", address.String())
+		if err != nil {
+			t.Fatalf("TCP %s not reusable: %v", address, err)
+		}
+		_ = listener.Close()
+	}
+	socket, err := net.ListenUDP(relayNetwork, relayAddress.(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("UDP not reusable: %v", err)
+	}
+	_ = socket.Close()
 }
 
 func TestCloseBeforeDuringAndAfterRunIsIdempotent(t *testing.T) {
@@ -255,11 +459,12 @@ func TestUnexpectedOwnedLoopFailureCancelsSiblings(t *testing.T) {
 func TestQueuedUnexpectedLoopFailureWinsLaterCancellation(t *testing.T) {
 	server := &Server{closeSignal: make(chan struct{})}
 	runContext, cancel := context.WithCancel(context.Background())
-	results := make(chan loopResult, 3)
+	results := make(chan loopResult, 4)
 	results <- server.classifyLoopResult(runContext, "management", errors.New("sensitive cause"))
 	cancel()
 	results <- server.classifyLoopResult(runContext, "relay", net.ErrClosed)
 	results <- server.classifyLoopResult(runContext, "sweeper", nil)
+	results <- server.classifyLoopResult(runContext, "player", net.ErrClosed)
 
 	err := coordinateLoopResults(runContext, server.closeSignal, make(chan struct{}), results, func() {})
 	if err != errOwnedLoop {
@@ -333,6 +538,7 @@ func (failingReader) Read([]byte) (int, error) { return 0, errors.New("injected 
 func testServerConfig() Config {
 	return Config{
 		ManagementListen: "127.0.0.1:0",
+		PlayerListen:     "127.0.0.1:0",
 		RelayNetwork:     "udp4",
 		RelayListen:      "127.0.0.1:0",
 		AdvertisedHost:   "relay.test",

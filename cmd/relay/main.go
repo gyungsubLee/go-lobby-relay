@@ -44,15 +44,16 @@ func parseConfig(args []string) (server.Config, error) {
 
 	flags := flag.NewFlagSet("relay", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var managementListen, relayNetwork, relayListen, advertisedHost, advertisedPort, operatorTokenFile requiredValue
+	var managementListen, playerListen, relayNetwork, relayListen, advertisedHost, advertisedPort, operatorTokenFile requiredValue
 	flags.Var(&managementListen, "management-listen", "")
+	flags.Var(&playerListen, "player-listen", "")
 	flags.Var(&relayNetwork, "relay-network", "")
 	flags.Var(&relayListen, "relay-listen", "")
 	flags.Var(&advertisedHost, "advertised-host", "")
 	flags.Var(&advertisedPort, "advertised-port", "")
 	flags.Var(&operatorTokenFile, "operator-token-file", "")
 	values := []*requiredValue{
-		&managementListen, &relayNetwork, &relayListen,
+		&managementListen, &playerListen, &relayNetwork, &relayListen,
 		&advertisedHost, &advertisedPort, &operatorTokenFile,
 	}
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
@@ -76,6 +77,7 @@ func parseConfig(args []string) (server.Config, error) {
 	}
 	return server.Config{
 		ManagementListen: managementListen.value,
+		PlayerListen:     playerListen.value,
 		RelayNetwork:     relayNetwork.value,
 		RelayListen:      relayListen.value,
 		AdvertisedHost:   advertisedHost.value,

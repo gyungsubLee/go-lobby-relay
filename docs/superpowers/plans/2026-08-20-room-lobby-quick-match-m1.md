@@ -486,7 +486,7 @@ func (server *Server) PlayerAddr() net.Addr
 
 CLI requires `--player-listen` in addition to the existing six flags.
 
-- [ ] **Step 1: Write server and CLI RED tests**
+- [x] **Step 1: Write server and CLI RED tests**
 
 Prove validation before bind, management → player → UDP bind order and reverse rollback, no goroutine before `Run`, four owned loops, one shared sweeper ticker calling both `Expire` methods, cancellation/fatal/Close joining all loops, all three addresses reusable, exact CLI flags, and token-file secrecy.
 
@@ -498,11 +498,11 @@ Run:
 
 Expected: compile/behavior RED for missing player listener/config.
 
-- [ ] **Step 2: Implement composition GREEN**
+- [x] **Step 2: Implement composition GREEN**
 
 Bind both TCP listeners before UDP. Construct one `playerauth.Auth`, one `lobby.Manager`, one `playerapi.Handler`, and the existing control/Relay handlers. Replace the Store-only sweeper loop with a server-owned `time.Second` ticker that calls `rooms.Expire()` then `lobbies.Expire()` without adding another goroutine.
 
-- [ ] **Step 3: Add real end-to-end tests**
+- [x] **Step 3: Add real end-to-end tests**
 
 Using real loopback sockets and two independent HTTP/UDP test clients, prove both paths:
 
@@ -513,7 +513,7 @@ issue tokens → enqueue both → matched status → private grants → UDP bind
 
 Also prove cross-player assignment access is impossible, different queues do not match, expiry rejects stale HTTP/UDP credentials, and shutdown joins before address rebind.
 
-- [ ] **Step 4: Verify focused and full GREEN**
+- [x] **Step 4: Verify focused and full GREEN**
 
 ```bash
 .tools/go/bin/go test ./internal/server ./cmd/relay -count=1
@@ -525,7 +525,7 @@ test -x out/relay
 
 Expected: PASS; loopback commands may require the approved non-sandbox environment.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server cmd/relay
