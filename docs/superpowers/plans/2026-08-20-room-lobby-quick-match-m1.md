@@ -149,7 +149,7 @@ func (auth *Auth) Issue(playerID string) (string, Claims, error)
 func (auth *Auth) Verify(token string) (Claims, error)
 ```
 
-- [ ] **Step 1: Write the RED tests**
+- [x] **Step 1: Write the RED tests**
 
 Tests must cover valid issue/verify, exact expiry, tampered payload/tag, non-canonical base64url, invalid ID, invalid config, CSPRNG read failure, different startup nonce, different operator secret, and no secret/token text in errors.
 
@@ -167,7 +167,7 @@ Run:
 
 Expected: compile RED because package/API does not exist.
 
-- [ ] **Step 2: Implement minimum GREEN**
+- [x] **Step 2: Implement minimum GREEN**
 
 Use `crypto/hmac`, `crypto/sha256`, `crypto/subtle` through `hmac.Equal`, `encoding/base64.RawURLEncoding.Strict`, `encoding/binary`, `io.ReadFull`, and `crypto/rand.Reader`. Derive the process key as:
 
@@ -177,7 +177,7 @@ HMAC-SHA256(operatorSecret, []byte("go-lobby-relay/player-token/v1\x00") || proc
 
 Validate structure before allocating based on attacker-controlled lengths. Authority ends when `!now.Before(expiresAt)`.
 
-- [ ] **Step 3: Verify GREEN and race**
+- [x] **Step 3: Verify GREEN and race**
 
 ```bash
 .tools/go/bin/go test ./internal/playerauth -count=1
@@ -186,7 +186,7 @@ Validate structure before allocating based on attacker-controlled lengths. Autho
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/playerauth
