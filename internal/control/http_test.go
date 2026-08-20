@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gyungsubLee/go-lobby-relay/internal/playerauth"
 	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
 	"github.com/gyungsubLee/go-lobby-relay/internal/store"
 	"golang.org/x/time/rate"
@@ -64,6 +65,45 @@ func TestParseOperatorTokenIsStrictAndRejectsZero(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got, err := ParseOperatorToken(tt.value); err == nil || got != ([32]byte{}) {
 				t.Fatalf("ParseOperatorToken(%q) = (%x, %v), want zero/error", tt.name, got, err)
+			}
+		})
+	}
+}
+
+func TestOperatorCanIssuePlayerToken(t *testing.T) {
+	fixture := newControlFixture(t, store.DefaultLimits(), &testSequenceReader{}, nil)
+	response := serveHandler(t, fixture.handler, http.MethodPost, "/v1/player-tokens", strings.NewReader(`{"player_id":"player-a"}`), controlBearer, "application/json")
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/player-tokens = %d %q", response.Code, response.Body.String())
+	}
+	var body struct {
+		PlayerID  string `json:"player_id"`
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	claims, err := fixture.playerTokens.Verify(body.Token)
+	if err != nil || claims.PlayerID != "player-a" || body.PlayerID != claims.PlayerID || body.ExpiresAt != claims.ExpiresAt.Format(time.RFC3339Nano) {
+		t.Fatalf("issued token response = %+v, claims=%+v err=%v", body, claims, err)
+	}
+
+	for _, test := range []struct {
+		name, method, body, contentType, authorization string
+		status                                         int
+	}{
+		{"unauthorized", http.MethodPost, `{"player_id":"player-a"}`, "application/json", "", http.StatusUnauthorized},
+		{"wrong method", http.MethodGet, "", "", controlBearer, http.StatusMethodNotAllowed},
+		{"unknown field", http.MethodPost, `{"player_id":"player-a","role":"admin"}`, "application/json", controlBearer, http.StatusBadRequest},
+		{"duplicate field", http.MethodPost, `{"player_id":"player-a","player_id":"player-b"}`, "application/json", controlBearer, http.StatusBadRequest},
+		{"invalid player", http.MethodPost, `{"player_id":"-bad"}`, "application/json", controlBearer, http.StatusBadRequest},
+		{"wrong content type", http.MethodPost, `{"player_id":"player-a"}`, "text/plain", controlBearer, http.StatusUnsupportedMediaType},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := serveHandler(t, fixture.handler, test.method, "/v1/player-tokens", strings.NewReader(test.body), test.authorization, test.contentType)
+			if got.Code != test.status {
+				t.Fatalf("status = %d body=%q, want %d", got.Code, got.Body.String(), test.status)
 			}
 		})
 	}
@@ -738,10 +778,11 @@ type testGetResponse struct {
 }
 
 type controlFixture struct {
-	handler http.Handler
-	store   *store.Store
-	clock   *controlStoreClock
-	config  Config
+	handler      http.Handler
+	store        *store.Store
+	playerTokens *playerauth.Auth
+	clock        *controlStoreClock
+	config       Config
 }
 
 func newControlFixture(t *testing.T, limits store.Limits, random io.Reader, mutate func(*Config)) controlFixture {
@@ -751,8 +792,18 @@ func newControlFixture(t *testing.T, limits store.Limits, random io.Reader, muta
 	if err != nil {
 		t.Fatalf("store.New(): %v", err)
 	}
+	playerTokens, err := playerauth.New(playerauth.Config{
+		OperatorSecret: controlTestToken,
+		Now:            func() time.Time { return controlTestWall },
+		Random:         bytes.NewReader(bytes.Repeat([]byte{0x91}, 32)),
+		TokenTTL:       playerauth.HardTokenTTL,
+	})
+	if err != nil {
+		t.Fatalf("playerauth.New(): %v", err)
+	}
 	config := Config{
 		OperatorToken:  controlTestToken,
+		PlayerTokens:   playerTokens,
 		AdvertisedHost: "relay.example.net",
 		AdvertisedPort: 30000,
 		RequestRate:    HardManagementRequestRate,
@@ -767,7 +818,7 @@ func newControlFixture(t *testing.T, limits store.Limits, random io.Reader, muta
 	if err != nil {
 		t.Fatalf("NewHandler(): %v", err)
 	}
-	return controlFixture{handler: handler, store: roomStore, clock: clock, config: config}
+	return controlFixture{handler: handler, store: roomStore, playerTokens: playerTokens, clock: clock, config: config}
 }
 
 func createRoomBody(t *testing.T, wall time.Time, roomTTL time.Duration, participants []testParticipantSpec) []byte {

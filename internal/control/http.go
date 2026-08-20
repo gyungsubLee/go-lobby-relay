@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gyungsubLee/go-lobby-relay/internal/playerauth"
 	"github.com/gyungsubLee/go-lobby-relay/internal/protocol"
 	"github.com/gyungsubLee/go-lobby-relay/internal/store"
 	"golang.org/x/time/rate"
@@ -31,6 +32,7 @@ var errInvalidOperatorToken = errors.New("invalid operator token")
 
 type Config struct {
 	OperatorToken  [32]byte
+	PlayerTokens   *playerauth.Auth
 	AdvertisedHost string
 	AdvertisedPort uint16
 	RequestRate    rate.Limit
@@ -45,6 +47,7 @@ type handler struct {
 	advertisedHost string
 	advertisedPort uint16
 	store          *store.Store
+	playerTokens   *playerauth.Auth
 	limiter        *rate.Limiter
 	semaphore      chan struct{}
 	now            func() time.Time
@@ -52,7 +55,7 @@ type handler struct {
 }
 
 func NewHandler(config Config, roomStore *store.Store) (http.Handler, error) {
-	if roomStore == nil || config.OperatorToken == [32]byte{} || config.AdvertisedHost == "" || config.AdvertisedPort == 0 ||
+	if roomStore == nil || config.PlayerTokens == nil || config.OperatorToken == [32]byte{} || config.AdvertisedHost == "" || config.AdvertisedPort == 0 ||
 		!(config.RequestRate > 0 && config.RequestRate <= HardManagementRequestRate) ||
 		config.RequestBurst <= 0 || config.RequestBurst > HardManagementRequestBurst ||
 		config.MaxConcurrent <= 0 || config.MaxConcurrent > HardManagementConcurrent {
@@ -67,6 +70,7 @@ func NewHandler(config Config, roomStore *store.Store) (http.Handler, error) {
 		advertisedHost: config.AdvertisedHost,
 		advertisedPort: config.AdvertisedPort,
 		store:          roomStore,
+		playerTokens:   config.PlayerTokens,
 		limiter:        rate.NewLimiter(config.RequestRate, config.RequestBurst),
 		semaphore:      make(chan struct{}, config.MaxConcurrent),
 		now:            now,
@@ -105,8 +109,9 @@ func ParseOperatorToken(encoded string) ([32]byte, error) {
 
 func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	roomID, ok := canonicalRoomPath(request)
-	if !ok {
+	roomID, roomRoute := canonicalRoomPath(request)
+	tokenRoute := request.URL.EscapedPath() == request.URL.Path && request.URL.Path == "/v1/player-tokens"
+	if !roomRoute && !tokenRoute {
 		writeError(writer, http.StatusNotFound, "not_found", "room not found")
 		return
 	}
@@ -115,11 +120,16 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "valid bearer token required")
 		return
 	}
-	if !protocol.ValidID(roomID) {
+	if roomRoute && !protocol.ValidID(roomID) {
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
 		return
 	}
-	if request.Method != http.MethodPut && request.Method != http.MethodGet && request.Method != http.MethodDelete {
+	if tokenRoute && request.Method != http.MethodPost {
+		writer.Header().Set("Allow", "POST")
+		writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if roomRoute && request.Method != http.MethodPut && request.Method != http.MethodGet && request.Method != http.MethodDelete {
 		writer.Header().Set("Allow", "PUT, GET, DELETE")
 		writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
@@ -133,6 +143,10 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		defer func() { <-handler.semaphore }()
 	default:
 		writeError(writer, http.StatusTooManyRequests, "rate_limited", "request rate or concurrency limit exceeded")
+		return
+	}
+	if tokenRoute {
+		handler.postPlayerToken(writer, request)
 		return
 	}
 
@@ -152,6 +166,66 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		}
 		handler.deleteRoom(writer, roomID)
 	}
+}
+
+func (handler *handler) postPlayerToken(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		PlayerID string `json:"player_id"`
+	}
+	if !decodeExactJSON(writer, request, &body, "player_id") {
+		return
+	}
+	if !protocol.ValidID(body.PlayerID) {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+		return
+	}
+	token, claims, err := handler.playerTokens.Issue(body.PlayerID)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error")
+		if errors.Is(err, playerauth.ErrFatalRandom) && handler.fatal != nil {
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			handler.fatal()
+		}
+		return
+	}
+	writeJSON(writer, http.StatusCreated, struct {
+		PlayerID  string `json:"player_id"`
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}{body.PlayerID, token, claims.ExpiresAt.UTC().Format(time.RFC3339Nano)})
+}
+
+func decodeExactJSON(writer http.ResponseWriter, request *http.Request, target any, keys ...string) bool {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+		return false
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBodyBytes)
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 65536 bytes")
+		} else {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+		}
+		return false
+	}
+	var object map[string]json.RawMessage
+	if !hasUniqueJSONFields(body) || json.Unmarshal(body, &object) != nil || !hasExactKeys(object, keys...) {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(target) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+		return false
+	}
+	return true
 }
 
 func canonicalRoomPath(request *http.Request) (string, bool) {

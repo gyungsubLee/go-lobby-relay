@@ -403,7 +403,7 @@ type playerapi.Config struct {
 func playerapi.NewHandler(Config) (http.Handler, error)
 ```
 
-- [ ] **Step 1: Write operator token-issue RED tests**
+- [x] **Step 1: Write operator token-issue RED tests**
 
 `POST /v1/player-tokens` accepts operator Bearer auth and exact JSON `{"player_id":"..."}` only. It returns `201` with `token`, `player_id`, and RFC3339Nano `expires_at`; rejects wrong method/body/content type/unknown or duplicate fields/invalid player ID/unauthorized/rate-limited requests; and never echoes secrets in errors.
 
@@ -415,7 +415,7 @@ Run:
 
 Expected: behavioral RED (`404` or missing dependency).
 
-- [ ] **Step 2: Write player API RED tests**
+- [x] **Step 2: Write player API RED tests**
 
 Cover every exact route from the design, Bearer parsing, expired/tampered tokens, body identity confusion attempts, strict JSON, body/page limits, method `Allow`, revision conflict, private search/access, participant-specific assignment encoding, cache control, and fixed errors.
 
@@ -427,7 +427,7 @@ Run:
 
 Expected: compile RED because package/API is missing.
 
-- [ ] **Step 3: Implement minimum handlers**
+- [x] **Step 3: Implement minimum handlers**
 
 Keep route parsing explicit and use these JSON actions:
 
@@ -440,7 +440,7 @@ Keep route parsing explicit and use these JSON actions:
 
 Encode grant IDs and secrets with strict raw base64url. Never include any other member's assignment in a response.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 ```bash
 .tools/go/bin/go test ./internal/control ./internal/playerapi -count=1
@@ -449,7 +449,7 @@ Encode grant IDs and secrets with strict raw base64url. Never include any other 
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/control internal/playerapi
