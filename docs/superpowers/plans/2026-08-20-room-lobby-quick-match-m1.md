@@ -234,8 +234,16 @@ type LobbySnapshot struct {
     State string
     Members []MemberSnapshot
     ExpiresAt time.Time
+    Assignment *Assignment
 }
-type LobbyPage struct { Lobbies []LobbySnapshot; NextCursor string }
+type LobbySummary struct {
+    LobbyID, OwnerPlayerID, QueueKey string
+    Visibility Visibility
+    Capacity, MemberCount uint32
+    Revision uint64
+    ExpiresAt time.Time
+}
+type LobbyPage struct { Lobbies []LobbySummary; NextCursor string }
 type Assignment struct {
     MatchID, RoomID, PlayerID, SessionID string
     GrantID protocol.Bytes16
@@ -264,7 +272,7 @@ func (manager *Manager) Start(playerID, lobbyID string, revision uint64) (Assign
 func (manager *Manager) Expire()
 ```
 
-- [ ] **Step 1: Write lifecycle RED tests**
+- [x] **Step 1: Write lifecycle RED tests**
 
 Cover create defaults/hard boundaries, public pagination order/cursor, private search exclusion, private exact access, duplicate membership, capacity, join and leave revision conflicts, deterministic owner transfer, empty close, ready reset on membership change, owner/full/all-ready start gates, exact expiry before sweep, cleanup after sweep, secret isolation, and 100 concurrent joins with at most capacity successes.
 
@@ -276,13 +284,13 @@ Run:
 
 Expected: compile RED on missing package/API.
 
-- [ ] **Step 2: Implement minimum in-memory authority**
+- [x] **Step 2: Implement minimum in-memory authority**
 
 Use one `sync.Mutex`, maps by lobby/player, and server-assigned increasing sequence numbers. IDs are strict URL-safe protocol IDs generated from 16 CSPRNG bytes with prefixes `l-`, `m-`, and `s-`; try at most nine collision draws. Sort snapshots by insertion sequence and members by join sequence.
 
 For `Start`, hold the Lobby lock, stage IDs and a `store.RoomDefinition`, call `store.CreateRoom`, map returned grants by `ParticipantID`, then change state to `matched`. No state changes precede a successful allocation.
 
-- [ ] **Step 3: Verify GREEN and race**
+- [x] **Step 3: Verify GREEN and race**
 
 ```bash
 .tools/go/bin/go test ./internal/lobby -count=1
@@ -291,7 +299,7 @@ For `Start`, hold the Lobby lock, stage IDs and a `store.RoomDefinition`, call `
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/lobby/lobby.go internal/lobby/lobby_test.go
